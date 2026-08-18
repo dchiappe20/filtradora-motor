@@ -10,3 +10,7 @@ __pycache__/
 # Entornos virtuales
 .venv/
 venv/
+
+# Estado local del CLI de Supabase (queda tras `supabase link`).
+supabase/.temp/
+supabase/.branches/

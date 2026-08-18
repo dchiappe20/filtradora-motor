@@ -3,3 +3,7 @@
 pandas==3.0.0
 requests==2.32.5
 supabase==2.28.3
+
+# `processor` importa numpy directamente, asi que va explicito aunque pandas
+# ya lo arrastre: depender de una dependencia transitiva es fragil.
+numpy==2.4.6

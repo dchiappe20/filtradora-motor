@@ -50,7 +50,7 @@ jobs:
           python-version: '3.12'
 
       - name: Instalar dependencias (solo lo que usa el runner)
-        run: pip install pandas==3.0.0 requests==2.32.5 supabase==2.28.3
+        run: pip install -r requirements.txt
 
       - name: Ejecutar barrido completo
         env:
