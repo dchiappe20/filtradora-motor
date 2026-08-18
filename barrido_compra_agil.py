@@ -31,6 +31,7 @@ from datetime import datetime
 import auth
 import compra_agil_api
 import datos_nube
+import seguimiento_compra_agil
 
 _MODULO = "compra_agil"
 
@@ -83,6 +84,77 @@ def _avisar_a_todas(empresas, estado, detalle):
             datos_nube.escribir_estado_descarga(_MODULO, estado, detalle)
         except Exception as e:
             print(f"  (no se pudo avisar a {nombre}: {e})", flush=True)
+
+
+def _filtrar_y_seguir(empresas, modo):
+    """Filtra la copia compartida para cada empresa y, en los barridos del día,
+    revisa además el estado de lo que ya venía siguiendo. -> texto de resumen.
+
+    Va después de la descarga y nunca tumba el barrido: los datos crudos ya
+    están guardados, así que un fallo aquí es "las apps ven lo de antes", no
+    "se perdió la corrida". Cada empresa se aísla de las demás por lo mismo.
+
+    La copia cruda se lee UNA vez y se pasa a todas: es la misma para todo el
+    mundo y son ~15 MB, así que leerla por empresa multiplicaría el egress sin
+    traer un solo dato nuevo.
+    """
+    from helpers import id_corto
+
+    try:
+        df_crudo = datos_nube.leer_tabla(compra_agil_api.TABLA_NUBE)
+    except Exception as e:
+        print(f"  ERROR al leer la copia compartida para filtrar: {e}", flush=True)
+        return ""
+
+    if df_crudo is None or df_crudo.empty:
+        print("  No hay datos de Compra Ágil que filtrar todavía.", flush=True)
+        return ""
+
+    # El motor de filtrado espera texto en todas las columnas, como hacía la app
+    # antes de llamarlo. Sin esto, un NaN acabaría comparándose como "nan".
+    df_crudo = df_crudo.fillna("")
+    for col in df_crudo.columns:
+        df_crudo[col] = df_crudo[col].astype(str)
+
+    print(f"Filtrando para {len(empresas)} empresa(s)"
+          + (" y revisando el estado de lo seguido." if modo == "dia" else "."),
+          flush=True)
+
+    total_cotizaciones = 0
+    total_cambios = 0
+    con_error = 0
+
+    for empresa_id, nombre in empresas:
+        etiqueta = f"{nombre} ({id_corto(empresa_id)})"
+        try:
+            res = seguimiento_compra_agil.filtrar_para_empresa(
+                empresa_id, nombre, df_crudo=df_crudo, log=lambda m: print(m, flush=True))
+            total_cotizaciones += res.get("cotizaciones", 0)
+        except Exception as e:
+            con_error += 1
+            print(f"  ERROR al filtrar para {etiqueta}: {e}", flush=True)
+            continue    # una empresa rota no puede dejar sin barrido a las demás
+
+        # El seguimiento sólo va en los barridos del día: el completo de la
+        # madrugada acaba de releer la ventana entera, así que el estado que hay
+        # en la tabla es de hace un momento y volver a preguntarle al portal por
+        # cada cotización no aportaría nada.
+        if modo != "dia":
+            continue
+        try:
+            res_seg = seguimiento_compra_agil.revisar_estado(
+                empresa_id, nombre, log=lambda m: print(m, flush=True))
+            total_cambios += res_seg.get("cambios", 0)
+        except Exception as e:
+            con_error += 1
+            print(f"  ERROR al revisar el estado de {etiqueta}: {e}", flush=True)
+
+    partes = [f"{total_cotizaciones} cotizaciones filtradas"]
+    if modo == "dia":
+        partes.append(f"{total_cambios} con cambio de estado")
+    if con_error:
+        partes.append(f"{con_error} empresa(s) con error (ver el log)")
+    return "Seguimiento: " + ", ".join(partes) + "."
 
 
 def main():
@@ -164,6 +236,11 @@ def main():
                    f"sirvió la ficha de {fichas_fallidas}; se reintentan en el próximo.")
     else:
         detalle = f"{etiqueta} completado."
+
+    # Con los datos ya en la nube, cada empresa se lleva su parte.
+    resumen_seg = _filtrar_y_seguir(empresas, modo)
+    if resumen_seg:
+        detalle = f"{detalle} {resumen_seg}"
 
     # 'listo' y no 'error': lo descargado ya está en la nube y es utilizable.
     _avisar_a_todas(empresas, "listo", detalle)

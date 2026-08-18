@@ -58,9 +58,26 @@ MAPEO_LICITACIONES = {
     "Texto Filtrado":       "texto_filtrado",
 }
 
+# El conjunto de Compra Ágil ya filtrado de cada empresa, con el seguimiento de
+# su estado. Lleva las mismas columnas de la cotización que `compra_agil` —para
+# que la pantalla no note la diferencia— más tres de auditoría (por qué entró,
+# lo produce `processor.filtrar_licitaciones`) y tres de seguimiento.
+TABLA_SEGUIMIENTO = "compra_agil_seguimiento"
+
+MAPEO_SEGUIMIENTO = {
+    **MAPEO_COMPRA_AGIL,
+    "FILTRO_APLICADO":      "filtro_aplicado",
+    "COLUMNA_ENCONTRADA":   "columna_encontrada",
+    "DETALLE_COINCIDENCIA": "detalle_coincidencia",
+    "Primera Detección":    "primera_deteccion",
+    "Última Revisión":      "ultima_revision",
+    "Estado Seguimiento":   "estado_seguimiento",
+}
+
 _MAPEOS = {
     "compra_agil": MAPEO_COMPRA_AGIL,
     "licitaciones": MAPEO_LICITACIONES,
+    TABLA_SEGUIMIENTO: MAPEO_SEGUIMIENTO,
 }
 
 _TAM_LOTE_INSERT = 400   # filas por insert (payloads acotados)
@@ -307,6 +324,168 @@ def codigos_vivos(nombre_tabla: str, columna_codigo: str = "numero_adquisicion")
             offset += _TAM_PAGINA_SELECT
     except Exception:
         return None
+
+
+# ===========================================================================
+# Compra Ágil ya filtrada, con seguimiento de estado
+#
+# El barrido filtra una vez por empresa y deja aquí el resultado; la app lo lee
+# y no filtra nada. Como el conjunto es chico (cientos de filas, no 38.000), el
+# barrido diurno puede permitirse volver a preguntarle al portal por cada
+# cotización y mantener su estado al día.
+# ===========================================================================
+
+def primeras_detecciones() -> dict:
+    """{numero_adquisicion: marca ISO} de lo que la empresa ya venía siguiendo.
+
+    Cada refiltrado rehace el conjunto entero. Sin esto, la fecha de primera
+    detección se reiniciaría tres veces al día y se perdería lo único que
+    distingue una cotización recién aparecida de una que lleva días ahí.
+    """
+    if supabase is None:
+        return {}
+    try:
+        empresa_id = empresa_actual()
+        vistas, offset = {}, 0
+        while True:
+            def _consulta():
+                return (supabase.table(TABLA_SEGUIMIENTO)
+                        .select("numero_adquisicion, primera_deteccion")
+                        .eq("empresa_id", empresa_id).order("id")
+                        .range(offset, offset + _TAM_PAGINA_SELECT - 1).execute())
+
+            datos = _exec(_consulta).data or []
+            for fila in datos:
+                codigo = str(fila.get("numero_adquisicion") or "")
+                marca = fila.get("primera_deteccion")
+                if codigo and marca and codigo not in vistas:
+                    vistas[codigo] = marca
+            if len(datos) < _TAM_PAGINA_SELECT:
+                return vistas
+            offset += _TAM_PAGINA_SELECT
+    except Exception:
+        return {}
+
+
+def guardar_seguimiento(df: pd.DataFrame) -> int:
+    """Reemplaza el conjunto filtrado de la empresa. Devuelve las filas escritas.
+
+    No usa `_a_filas` porque las marcas de tiempo no admiten el "" que ése
+    escribe para los vacíos: cuando no hay valor hay que OMITIR la columna, y
+    entonces manda el default de la tabla (`now()` para `primera_deteccion`).
+    """
+    _verificar_cliente()
+    empresa_id = empresa_actual()
+
+    filas = []
+    if df is not None and not df.empty:
+        for _, row in df.iterrows():
+            fila = {"empresa_id": empresa_id}
+            for col_excel, col_db in MAPEO_SEGUIMIENTO.items():
+                valor = _limpiar_celda(row.get(col_excel, ""))
+                # Las tres de tipo fecha/estado se omiten si vienen vacías.
+                if col_db in ("primera_deteccion", "ultima_revision") and not valor:
+                    continue
+                if col_db == "estado_seguimiento" and not valor:
+                    continue
+                fila[col_db] = valor
+            filas.append(fila)
+
+    with _lock_nube:
+        try:
+            _exec(lambda: supabase.table(TABLA_SEGUIMIENTO).delete()
+                  .eq("empresa_id", empresa_id).execute())
+            for i in range(0, len(filas), _TAM_LOTE_INSERT):
+                lote = filas[i:i + _TAM_LOTE_INSERT]
+                _exec(lambda lote=lote: supabase.table(TABLA_SEGUIMIENTO)
+                      .insert(lote).execute())
+        except ErrorNube:
+            raise
+        except Exception as e:
+            raise ErrorNube(f"No se pudo guardar el seguimiento: {e}") from e
+    return len(filas)
+
+
+def seguimiento_vigentes() -> list:
+    """[{codigo, llamado, cierre1, cierre2}], una entrada por cotización viva.
+
+    La tabla lleva una fila por producto; aquí se colapsa a una por cotización,
+    que es el grano al que se le hace seguimiento.
+    """
+    _verificar_cliente()
+    empresa_id = empresa_actual()
+    porc, offset = {}, 0
+    try:
+        while True:
+            def _consulta():
+                return (supabase.table(TABLA_SEGUIMIENTO)
+                        .select("numero_adquisicion, llamado, "
+                                "fecha_cierre_1er_llamado, fecha_cierre_2do_llamado")
+                        .eq("empresa_id", empresa_id)
+                        .eq("estado_seguimiento", "vigente")
+                        .order("id").range(offset, offset + _TAM_PAGINA_SELECT - 1)
+                        .execute())
+
+            datos = _exec(_consulta).data or []
+            for fila in datos:
+                codigo = str(fila.get("numero_adquisicion") or "")
+                if codigo and codigo not in porc:
+                    porc[codigo] = {
+                        "codigo": codigo,
+                        "llamado": fila.get("llamado") or "",
+                        "cierre1": fila.get("fecha_cierre_1er_llamado") or "",
+                        "cierre2": fila.get("fecha_cierre_2do_llamado") or "",
+                    }
+            if len(datos) < _TAM_PAGINA_SELECT:
+                break
+            offset += _TAM_PAGINA_SELECT
+    except Exception as e:
+        raise ErrorNube(f"No se pudo leer el seguimiento: {e}") from e
+    return list(porc.values())
+
+
+def actualizar_seguimiento(codigo: str, campos: dict):
+    """Refresca las columnas de UNA cotización seguida (todas sus filas)."""
+    if not codigo or not campos:
+        return
+    _verificar_cliente()
+    empresa_id = empresa_actual()
+    datos = dict(campos)
+    datos["actualizado"] = datetime.now(timezone.utc).isoformat()
+    with _lock_nube:
+        try:
+            _exec(lambda: supabase.table(TABLA_SEGUIMIENTO).update(datos)
+                  .eq("empresa_id", empresa_id)
+                  .eq("numero_adquisicion", str(codigo)).execute())
+        except Exception as e:
+            raise ErrorNube(f"No se pudo actualizar el seguimiento: {e}") from e
+
+
+def cerrar_seguimiento(codigos) -> int:
+    """Marca como 'cerrada' las cotizaciones indicadas. Devuelve cuántas.
+
+    No se borran: que una cotización se haya cerrado es justamente el final del
+    seguimiento, y el usuario tiene que poder verlo. La poda por antigüedad la
+    hace el refiltrado, que sólo conserva lo que sigue en la ventana.
+    """
+    codigos = [str(c) for c in dict.fromkeys(codigos or []) if str(c).strip()]
+    if not codigos:
+        return 0
+    _verificar_cliente()
+    empresa_id = empresa_actual()
+    datos = {"estado_seguimiento": "cerrada",
+             "ultima_revision": datetime.now(timezone.utc).isoformat(),
+             "actualizado": datetime.now(timezone.utc).isoformat()}
+    with _lock_nube:
+        try:
+            for i in range(0, len(codigos), 100):
+                lote = codigos[i:i + 100]
+                _exec(lambda lote=lote: supabase.table(TABLA_SEGUIMIENTO)
+                      .update(datos).eq("empresa_id", empresa_id)
+                      .in_("numero_adquisicion", lote).execute())
+        except Exception as e:
+            raise ErrorNube(f"No se pudieron cerrar las cotizaciones: {e}") from e
+    return len(codigos)
 
 
 def escribir_estado_descarga(modulo: str, estado: str, detalle: str = ""):
