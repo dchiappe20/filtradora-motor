@@ -1,0 +1,46 @@
+name: Revisión nocturna Foros Inversos
+
+# Revisa cada noche, POR EMPRESA, los foros de aclaración de sus licitaciones
+# ofertadas (tabla foro_ofertadas): detecta menciones a la empresa y egresa las
+# que superan 1 año o dejan de estar CERRADA. El ingreso de la lista es aparte.
+on:
+  schedule:
+    # 09:00 UTC ≈ 05:00 Chile (después del nocturno de Compra Ágil).
+    - cron: '0 9 * * *'
+  workflow_dispatch: {}
+
+# El token automatico del job no necesita escribir nada en el repositorio: solo
+# se clona el codigo. En un repositorio publico esto importa mas, porque cierra
+# lo que un workflow comprometido podria hacer con el.
+permissions:
+  contents: read
+
+jobs:
+  revisar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    concurrency:
+      group: foros-nocturno
+      cancel-in-progress: false
+    steps:
+      - name: Clonar repositorio
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar dependencias
+        run: pip install pandas==3.0.0 requests==2.32.5 supabase==2.28.3
+
+      - name: Ejecutar revisión de foros
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          # service_role: recorre empresas de `core` y escribe hallazgos (salta RLS).
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          # Tickets por empresa: se usan solo para consultar el ESTADO de cada
+          # licitación (cerrada/adjudicada/...). El scraping del foro no usa ticket.
+          MP_TICKET_AMILAB: ${{ secrets.MP_TICKET_AMILAB }}
+          MP_TICKET_UTEM: ${{ secrets.MP_TICKET_UTEM }}
+        run: python revisar_foros_nocturno.py

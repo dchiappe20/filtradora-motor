@@ -1,0 +1,88 @@
+name: Barridos diurnos Compra Ágil (10:00 y 16:00 Chile)
+
+# Barridos CORTOS, dos veces al día: listan SÓLO lo publicado hoy, para que las
+# cotizaciones nuevas no esperen hasta la madrugada. No vuelven sobre los días
+# anteriores.
+#
+# De paso sueltan de la tabla lo que ya tiene el 2do cierre vencido, que se sabe
+# con la fecha guardada sin preguntarle nada al portal.
+#
+# Todo lo que sí exige volver a mirar el portal —los pasos de 1er a 2do llamado
+# y los cierres— es cosa del barrido COMPLETO de la madrugada
+# (`descarga-nocturna.yml`), que recorre los 30 días de la ventana.
+on:
+  schedule:
+    # El cron de GitHub SÓLO entiende UTC, y Chile cambia de huso dos veces al
+    # año (UTC−4 en invierno, UTC−3 en verano). Por eso se programan las DOS
+    # horas UTC posibles de cada barrido y el primer paso descarta la que no
+    # corresponda según la hora real en Chile:
+    #   13:00 UTC = 10:00 (verano) | 09:00 (invierno)
+    #   14:00 UTC = 11:00 (verano) | 10:00 (invierno)
+    #   19:00 UTC = 16:00 (verano) | 15:00 (invierno)
+    #   20:00 UTC = 17:00 (verano) | 16:00 (invierno)
+    # Las dos corridas que se descartan terminan en segundos y casi no gastan
+    # minutos de Actions.
+    - cron: '0 13,14,19,20 * * *'
+  # A mano desde "Actions" -> "Run workflow": corre siempre, sea la hora que sea.
+  workflow_dispatch: {}
+
+# El token automatico del job no necesita escribir nada en el repositorio: solo
+# se clona el codigo. En un repositorio publico esto importa mas, porque cierra
+# lo que un workflow comprometido podria hacer con el.
+permissions:
+  contents: read
+
+jobs:
+  descargar:
+    runs-on: ubuntu-latest
+    # El corte de verdad lo pone el script (LIMITE_MINUTOS['dia'] = 100): se
+    # detiene solo tras guardar lo que lleve. De régimen esto son minutos, pero
+    # en horario de oficina el portal responde lento y conviene el margen.
+    timeout-minutes: 120
+    # Mismo grupo que el barrido nocturno: dos barridos nunca escriben la tabla
+    # a la vez. El que llegue segundo espera.
+    concurrency:
+      group: descarga-compra-agil
+      cancel-in-progress: false
+    env:
+      # Todo el job razona en hora de Chile: el guardia de abajo y el propio
+      # barrido (que necesita saber qué día es «hoy» allá).
+      TZ: America/Santiago
+    steps:
+      - name: ¿Toca barrido a esta hora en Chile?
+        id: horario
+        run: |
+          hora=$(date +%H)
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "Lanzado a mano (en Chile son las $hora): se corre igual."
+            echo "toca=si" >> "$GITHUB_OUTPUT"
+          elif [ "$hora" = "10" ] || [ "$hora" = "16" ]; then
+            echo "En Chile son las $hora: toca barrido."
+            echo "toca=si" >> "$GITHUB_OUTPUT"
+          else
+            echo "En Chile son las $hora: esta corrida es la del otro huso, se salta."
+            echo "toca=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Clonar repositorio
+        if: steps.horario.outputs.toca == 'si'
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        if: steps.horario.outputs.toca == 'si'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar dependencias (solo lo que usa el runner)
+        if: steps.horario.outputs.toca == 'si'
+        run: pip install pandas==3.0.0 requests==2.32.5 supabase==2.28.3
+
+      - name: Ejecutar barrido del día
+        if: steps.horario.outputs.toca == 'si'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          # service_role: el runner recorre las empresas de `core` (salta RLS) y
+          # escribe en cada una. El código acota todo por empresa_id.
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python barrido_compra_agil.py dia

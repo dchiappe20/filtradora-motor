@@ -1,0 +1,12 @@
+# ESTE REPOSITORIO ES PUBLICO. Nada de credenciales aqui dentro.
+# Lo sensible va en Secrets del repositorio (Settings -> Secrets -> Actions).
+.env
+.env.*
+
+# Cachés de Python
+__pycache__/
+*.pyc
+
+# Entornos virtuales
+.venv/
+venv/

@@ -1,0 +1,104 @@
+name: Descarga Licitaciones (rango)
+
+# Se dispara desde la app (botón "Descargar datos") con un rango de fechas.
+# Descarga las licitaciones de ese rango y reemplaza la tabla `licitaciones` en
+# Supabase. La app sondea la tabla `descarga_estado` y, al terminar, lee de la nube.
+#
+# La app NO dispara este workflow directamente: llama a la Edge Function
+# `disparar-descarga` (ver supabase/functions/), que es quien guarda el token de
+# GitHub y quien decide la empresa a partir del JWT de quien pide la descarga.
+# Por eso `empresa_id` es de fiar aunque venga como input: sólo esa función
+# puede ponerlo, y lo saca del registro central, no del cliente.
+on:
+  workflow_dispatch:
+    inputs:
+      fecha_inicio:
+        description: 'Fecha inicio (dd-mm-yyyy)'
+        required: true
+        type: string
+      fecha_fin:
+        description: 'Fecha fin (dd-mm-yyyy)'
+        required: true
+        type: string
+      empresa_id:
+        description: 'ID de la empresa (dónde guardar)'
+        required: true
+        type: string
+      empresa_nombre:
+        description: 'Nombre de la empresa (para elegir el ticket)'
+        required: false
+        type: string
+
+# El token automático del job no necesita escribir nada en el repositorio: sólo
+# se clona el código. En un repositorio público esto importa más, porque cierra
+# lo que un workflow comprometido podría hacer con él.
+permissions:
+  contents: read
+
+jobs:
+  descargar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    # Serializa: si llegan dos disparos, corren uno tras otro (la tabla se reemplaza
+    # entera, así no se pisan a mitad de camino).
+    concurrency:
+      group: descarga-licitaciones
+      cancel-in-progress: false
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      # El runner NO tiene sesión de usuario (rol authenticated), así que usa la
+      # service_role key (salta RLS y tiene acceso de tabla). El aislamiento por
+      # empresa lo garantiza el código, que filtra TODO por empresa_id.
+      SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      EMPRESA_ID: ${{ inputs.empresa_id }}
+      EMPRESA_NOMBRE: ${{ inputs.empresa_nombre }}
+    steps:
+      - name: Clonar repositorio
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar dependencias
+        run: pip install pandas==3.0.0 requests==2.32.5 supabase==2.28.3
+
+      - name: Ejecutar descarga del rango
+        env:
+          # Un ticket POR EMPRESA. El runner elige por EMPRESA_NOMBRE -> MP_TICKET_<SLUG>.
+          # Al sumar una empresa nueva: crear su Secret y agregar aquí su línea.
+          MP_TICKET_AMILAB: ${{ secrets.MP_TICKET_AMILAB }}
+          MP_TICKET_UTEM: ${{ secrets.MP_TICKET_UTEM }}
+          FECHA_INICIO: ${{ inputs.fecha_inicio }}
+          FECHA_FIN: ${{ inputs.fecha_fin }}
+        run: python descargar_licitaciones_rango.py
+
+      # Red de seguridad. Antes la app se enteraba de que el runner había muerto
+      # preguntándole a la API de GitHub; como ya no lleva token, tiene que
+      # enterarse por la nube. `always()` corre también cuando el job falla, se
+      # cancela o se pasa del timeout: sin esto la app se quedaría esperando en
+      # "En cola en el servidor..." hasta agotar su propio plazo de una hora.
+      #
+      # Va con `curl` a propósito, no con el código del repo: tiene que funcionar
+      # aunque lo que fallara fuese el checkout, el setup de Python o el pip.
+      #
+      # El filtro `estado=eq.corriendo` es lo que evita pisar un final bueno: si
+      # la descarga ya dejó 'listo', 'cancelado' o 'error', no cambia ninguna fila.
+      - name: Avisar a la app si la corrida terminó a medias
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          detalle="La descarga terminó en el servidor sin completarse ($JOB_STATUS). Revisa el log de la corrida."
+          cuerpo=$(jq -nc \
+            --arg detalle "$detalle" \
+            --arg ahora "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{estado: "error", detalle: $detalle, actualizado: $ahora}')
+          curl -sS -X PATCH \
+            "$SUPABASE_URL/rest/v1/descarga_estado?empresa_id=eq.$EMPRESA_ID&modulo=eq.licitaciones&estado=eq.corriendo" \
+            -H "apikey: $SUPABASE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_KEY" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            -d "$cuerpo"

@@ -1,0 +1,64 @@
+name: Descarga nocturna Compra Ágil
+
+# Barrido COMPLETO: recorre la ventana entera (DIAS_VENTANA = 30 días, día por
+# día) y deja los datos en Supabase. Es el que pone al día todo lo que los
+# barridos cortos del día no miran. La app sólo lee de la nube.
+#
+# Durante el día hay otros dos barridos, más cortos: ver `compra-agil-diurno.yml`.
+on:
+  schedule:
+    # 05:00 UTC ≈ 01:00 (invierno) / 02:00 (verano) en Chile. De madrugada el
+    # portal responde mucho mejor y la corrida termina bastante antes de que la
+    # gente empiece a trabajar.
+    # El cron de GitHub Actions es "best effort": puede atrasarse algunos minutos.
+    - cron: '0 5 * * *'
+  # Permite lanzarlo a mano desde la pestaña "Actions" -> "Run workflow".
+  workflow_dispatch: {}
+
+# El token automatico del job no necesita escribir nada en el repositorio: solo
+# se clona el codigo. En un repositorio publico esto importa mas, porque cierra
+# lo que un workflow comprometido podria hacer con el.
+permissions:
+  contents: read
+
+jobs:
+  descargar:
+    runs-on: ubuntu-latest
+    # GitHub mata cualquier trabajo a las 6 h (360 min) pase lo que pase: subir
+    # este número más allá no sirve de nada. Por eso el corte de verdad lo pone
+    # el script (LIMITE_MINUTOS['completo'] = 300 en barrido_compra_agil.py), que
+    # se detiene solo tras guardar lo que lleve; esto es sólo la red de seguridad.
+    #
+    # De régimen el barrido baja las ~3.000 cotizaciones del día (~15-25 min). La
+    # PRIMERA población son ~30.000 (varias horas a la velocidad que da el
+    # portal), así que no cabe en una corrida: se completa sola en dos o tres
+    # noches, porque lo descargado se guarda por lotes y la siguiente sigue donde
+    # quedó.
+    timeout-minutes: 350
+    # Evita que dos barridos (éste, uno diurno o uno manual) se pisen escribiendo
+    # la tabla. El que llegue segundo espera a que termine el primero.
+    concurrency:
+      group: descarga-compra-agil
+      cancel-in-progress: false
+    steps:
+      - name: Clonar repositorio
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar dependencias (solo lo que usa el runner)
+        run: pip install pandas==3.0.0 requests==2.32.5 supabase==2.28.3
+
+      - name: Ejecutar barrido completo
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          # service_role: el runner recorre las empresas de `core` (salta RLS) y
+          # escribe en cada una. El código acota todo por empresa_id.
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          # El runner corre en UTC; sin esto, «hoy» sería el día siguiente
+          # durante toda la madrugada chilena y la ventana quedaría corrida.
+          TZ: America/Santiago
+        run: python barrido_compra_agil.py completo
