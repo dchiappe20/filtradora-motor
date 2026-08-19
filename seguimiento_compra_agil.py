@@ -22,6 +22,7 @@ El filtrado NO se reimplementa: se llama a `processor.filtrar_licitaciones`, el
 mismo motor que corría en la app. Así lo que ve el usuario no cambia.
 """
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
@@ -38,10 +39,15 @@ import processor
 # fichas, no miles— y el barrido diurno comparte el portal con gente trabajando.
 HILOS_REVISION = 3
 
-# Cuántas cotizaciones se revisan como mucho en una pasada. Si una empresa tiene
-# filtros muy amplios, esto evita que el seguimiento se coma el barrido entero;
-# lo que quede se revisa en la corrida siguiente, empezando por lo más antiguo.
+# Tope de seguridad por cantidad. El corte de verdad lo pone el TIEMPO (ver
+# `corte` en `revisar_estado`): 600 fichas a 3 hilos son ~25 minutos, y con
+# varias empresas eso no cabe en ninguna corrida. Contar fichas era medir la
+# cosa equivocada.
 MAX_REVISIONES = 600
+
+# Cada cuántas fichas se mira el reloj. Con lotes de 30 el corte llega con
+# menos de un minuto de retraso y no se paga una comprobación por ficha.
+LOTE_REVISION = 30
 
 _COL_ID = "Numero Adquisición"
 _COL_LLAMADO = "Llamado"
@@ -139,15 +145,21 @@ def _vencida(fecha_texto, ahora):
     return bool(pd.notna(fecha) and fecha < ahora)
 
 
-def revisar_estado(empresa_id, nombre="", log=print):
+def revisar_estado(empresa_id, nombre="", corte=None, log=print):
     """Refresca el estado de lo que la empresa sigue. -> dict con el resumen.
+
+    `corte` es una marca de `time.monotonic()` a partir de la cual se para y se
+    guarda lo que lleve. Es lo que impide que el seguimiento se coma el barrido:
+    sin él, 600 fichas a 3 hilos son ~25 minutos POR EMPRESA y el job de GitHub
+    moría a los 120 sin llegar a terminar ninguna.
 
     Dos pasos, y el orden importa porque el barato descarta trabajo del caro:
 
       1. Lo que ya tiene el 2do cierre vencido se cierra SIN tocar el portal:
          se sabe con la fecha guardada. Misma idea que
          `compra_agil_api._codigos_segundo_cierre_vencido`.
-      2. Del resto se pide la ficha y se actualizan llamado y cierres.
+      2. Del resto se pide la ficha y se actualizan llamado y cierres, de lo
+         más rezagado a lo más reciente (lo ordena `seguimiento_vigentes`).
     """
     _fijar_empresa(empresa_id, nombre)
 
@@ -170,13 +182,13 @@ def revisar_estado(empresa_id, nombre="", log=print):
 
     por_revisar = [v for v in vigentes if v["codigo"] not in set(ya_cerradas)]
     if len(por_revisar) > MAX_REVISIONES:
-        log(f"  {nombre}: {len(por_revisar)} en seguimiento, se revisan "
-            f"{MAX_REVISIONES} en esta pasada; el resto, en la siguiente.")
         por_revisar = por_revisar[:MAX_REVISIONES]
 
     # --- 2. Las que hay que confirmar en el portal ---------------------------
     cambios = 0
     fallidas = 0
+    revisadas = 0
+    sin_tiempo = False
 
     def _revisar(entrada):
         ficha = compra_agil_api._obtener_ficha(entrada["codigo"])
@@ -185,43 +197,60 @@ def revisar_estado(empresa_id, nombre="", log=print):
         filas = compra_agil_api._procesar_ficha(ficha)
         return entrada["codigo"], (filas[0] if filas else None)
 
-    with ThreadPoolExecutor(max_workers=HILOS_REVISION) as pool:
-        futuros = {pool.submit(_revisar, v): v for v in por_revisar}
-        for futuro in as_completed(futuros):
-            entrada = futuros[futuro]
-            try:
-                _codigo, fila = futuro.result()
-            except Exception:
-                fallidas += 1
-                continue
+    def _aplicar(entrada, fila):
+        """Guarda lo que dijo el portal. -> True si algo cambió de estado."""
+        nuevos = {
+            "llamado": fila.get(_COL_LLAMADO, "") or "",
+            "fecha_cierre_1er_llamado": fila.get(_COL_CIERRE1, "") or "",
+            "fecha_cierre_2do_llamado": fila.get(_COL_CIERRE2, "") or "",
+            "ultima_revision": _ahora_iso(),
+        }
+        # Si además ya venció el 2do cierre que acaba de informar, se cierra.
+        if _vencida(nuevos["fecha_cierre_2do_llamado"], ahora):
+            nuevos["estado_seguimiento"] = "cerrada"
 
-            if fila is None:
-                # El portal no la sirvió. No se toca nada: puede ser un fallo
-                # pasajero, y darla por cerrada la escondería de la pantalla.
-                fallidas += 1
-                continue
+        cambio = (nuevos["llamado"] != entrada["llamado"]
+                  or nuevos["fecha_cierre_2do_llamado"] != entrada["cierre2"])
+        datos_nube.actualizar_seguimiento(entrada["codigo"], nuevos)
+        return cambio
 
-            nuevos = {
-                "llamado": fila.get(_COL_LLAMADO, "") or "",
-                "fecha_cierre_1er_llamado": fila.get(_COL_CIERRE1, "") or "",
-                "fecha_cierre_2do_llamado": fila.get(_COL_CIERRE2, "") or "",
-                "ultima_revision": _ahora_iso(),
-            }
-            # Si además ya venció el 2do cierre que acaba de informar, se cierra.
-            if _vencida(nuevos["fecha_cierre_2do_llamado"], ahora):
-                nuevos["estado_seguimiento"] = "cerrada"
+    # Se va por lotes para poder mirar el reloj entre uno y otro. Con todo
+    # lanzado de golpe no habría dónde cortar: `as_completed` sólo termina
+    # cuando terminan las 600.
+    for i in range(0, len(por_revisar), LOTE_REVISION):
+        if corte is not None and time.monotonic() >= corte:
+            sin_tiempo = True
+            break
 
-            cambio = (nuevos["llamado"] != entrada["llamado"]
-                      or nuevos["fecha_cierre_2do_llamado"] != entrada["cierre2"])
-            try:
-                datos_nube.actualizar_seguimiento(entrada["codigo"], nuevos)
-            except datos_nube.ErrorNube:
-                fallidas += 1
-                continue
-            if cambio:
-                cambios += 1
+        lote = por_revisar[i:i + LOTE_REVISION]
+        with ThreadPoolExecutor(max_workers=HILOS_REVISION) as pool:
+            futuros = {pool.submit(_revisar, v): v for v in lote}
+            for futuro in as_completed(futuros):
+                entrada = futuros[futuro]
+                revisadas += 1
+                try:
+                    _codigo, fila = futuro.result()
+                except Exception:
+                    fallidas += 1
+                    continue
 
-    log(f"  {nombre}: revisadas {len(por_revisar)}, {cambios} con cambio de estado, "
-        f"{len(ya_cerradas)} cerradas por fecha, {fallidas} que el portal no sirvió.")
-    return {"revisadas": len(por_revisar), "cerradas": len(ya_cerradas),
-            "cambios": cambios, "fallidas": fallidas}
+                if fila is None:
+                    # El portal no la sirvió. No se toca nada: puede ser un fallo
+                    # pasajero, y darla por cerrada la escondería de la pantalla.
+                    fallidas += 1
+                    continue
+
+                try:
+                    if _aplicar(entrada, fila):
+                        cambios += 1
+                except datos_nube.ErrorNube:
+                    fallidas += 1
+
+    pendientes = len(por_revisar) - revisadas
+    cola = (f", {pendientes} para la próxima corrida" if sin_tiempo and pendientes > 0 else "")
+    log(f"  {nombre}: revisadas {revisadas} de {len(por_revisar)}, {cambios} con cambio "
+        f"de estado, {len(ya_cerradas)} cerradas por fecha, {fallidas} que el portal "
+        f"no sirvió{cola}.")
+    return {"revisadas": revisadas, "cerradas": len(ya_cerradas), "cambios": cambios,
+            "fallidas": fallidas, "pendientes": max(0, pendientes),
+            "sin_tiempo": sin_tiempo}

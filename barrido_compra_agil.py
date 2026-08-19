@@ -41,6 +41,15 @@ _MODULO = "compra_agil"
 # script decida cuándo parar, en vez de que lo maten a mitad de un lote.
 LIMITE_MINUTOS = {"completo": 300, "dia": 100}
 
+# Minutos reservados para el SEGUIMIENTO, después de la descarga. Van aparte a
+# propósito: el 2026-08-19 la descarga del día se llevó sus 100 minutos y el job
+# murió a los 120 en mitad del seguimiento, sin terminar ninguna empresa. El
+# reparto tiene que estar escrito, no ser lo que sobre.
+#
+# El `timeout-minutes` del workflow tiene que ser MAYOR que la suma de los dos
+# más el arranque (checkout + pip ≈ 3 min), o GitHub corta igual.
+MINUTOS_SEGUIMIENTO = {"completo": 0, "dia": 55}
+
 _ultimo_estado = {"t": 0.0}  # throttle de escrituras de estado a la nube
 
 
@@ -116,42 +125,65 @@ def _filtrar_y_seguir(empresas, modo):
     for col in df_crudo.columns:
         df_crudo[col] = df_crudo[col].astype(str)
 
-    print(f"Filtrando para {len(empresas)} empresa(s)"
-          + (" y revisando el estado de lo seguido." if modo == "dia" else "."),
-          flush=True)
-
+    escribir = lambda m: print(m, flush=True)
     total_cotizaciones = 0
     total_cambios = 0
+    total_pendientes = 0
     con_error = 0
 
+    # --- FASE 1: filtrar TODAS -----------------------------------------------
+    # Va primero y sin reloj porque es lo esencial y lo barato: sin filtrar, la
+    # app no ve las cotizaciones nuevas. Son ~1-2 minutos por empresa.
+    print(f"Filtrando para {len(empresas)} empresa(s)...", flush=True)
     for empresa_id, nombre in empresas:
-        etiqueta = f"{nombre} ({id_corto(empresa_id)})"
         try:
             res = seguimiento_compra_agil.filtrar_para_empresa(
-                empresa_id, nombre, df_crudo=df_crudo, log=lambda m: print(m, flush=True))
+                empresa_id, nombre, df_crudo=df_crudo, log=escribir)
             total_cotizaciones += res.get("cotizaciones", 0)
         except Exception as e:
             con_error += 1
-            print(f"  ERROR al filtrar para {etiqueta}: {e}", flush=True)
-            continue    # una empresa rota no puede dejar sin barrido a las demás
+            print(f"  ERROR al filtrar para {nombre} ({id_corto(empresa_id)}): {e}",
+                  flush=True)
+            # Una empresa rota no puede dejar sin barrido a las demás.
 
-        # El seguimiento sólo va en los barridos del día: el completo de la
-        # madrugada acaba de releer la ventana entera, así que el estado que hay
-        # en la tabla es de hace un momento y volver a preguntarle al portal por
-        # cada cotización no aportaría nada.
-        if modo != "dia":
+    # --- FASE 2: seguir el estado, con lo que quede de tiempo -----------------
+    # Sólo en los barridos del día: el completo de la madrugada acaba de releer
+    # la ventana entera, así que el estado de la tabla es de hace un momento.
+    if modo != "dia":
+        return f"Seguimiento: {total_cotizaciones} cotizaciones filtradas."
+
+    presupuesto = MINUTOS_SEGUIMIENTO.get(modo, 0) * 60
+    if presupuesto <= 0:
+        return f"Seguimiento: {total_cotizaciones} cotizaciones filtradas."
+
+    # El tiempo se reparte por igual. Con el orden por `ultima_revision` que usa
+    # `seguimiento_vigentes`, cada corrida ataca lo más rezagado de cada empresa,
+    # así que lo que hoy no cabe entra mañana: nada se queda sin revisar nunca.
+    fin = time.monotonic() + presupuesto
+    print(f"Revisando el estado de lo seguido ({MINUTOS_SEGUIMIENTO[modo]} min "
+          f"para {len(empresas)} empresa(s))...", flush=True)
+
+    for i, (empresa_id, nombre) in enumerate(empresas):
+        restantes = len(empresas) - i
+        corte = min(fin, time.monotonic() + (fin - time.monotonic()) / restantes)
+        if time.monotonic() >= fin:
+            print(f"  Sin tiempo para {nombre} ({id_corto(empresa_id)}); "
+                  "le toca en la próxima corrida.", flush=True)
             continue
         try:
             res_seg = seguimiento_compra_agil.revisar_estado(
-                empresa_id, nombre, log=lambda m: print(m, flush=True))
+                empresa_id, nombre, corte=corte, log=escribir)
             total_cambios += res_seg.get("cambios", 0)
+            total_pendientes += res_seg.get("pendientes", 0)
         except Exception as e:
             con_error += 1
-            print(f"  ERROR al revisar el estado de {etiqueta}: {e}", flush=True)
+            print(f"  ERROR al revisar el estado de {nombre} "
+                  f"({id_corto(empresa_id)}): {e}", flush=True)
 
-    partes = [f"{total_cotizaciones} cotizaciones filtradas"]
-    if modo == "dia":
-        partes.append(f"{total_cambios} con cambio de estado")
+    partes = [f"{total_cotizaciones} cotizaciones filtradas",
+              f"{total_cambios} con cambio de estado"]
+    if total_pendientes:
+        partes.append(f"{total_pendientes} sin revisar (siguen en la próxima)")
     if con_error:
         partes.append(f"{con_error} empresa(s) con error (ver el log)")
     return "Seguimiento: " + ", ".join(partes) + "."
