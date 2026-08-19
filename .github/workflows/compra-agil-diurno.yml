@@ -18,11 +18,14 @@ on:
     # corresponda según la hora real en Chile:
     #   13:00 UTC = 10:00 (verano) | 09:00 (invierno)
     #   14:00 UTC = 11:00 (verano) | 10:00 (invierno)
+    #   18:00 UTC = 15:00 (verano) | 14:00 (invierno)
     #   19:00 UTC = 16:00 (verano) | 15:00 (invierno)
-    #   20:00 UTC = 17:00 (verano) | 16:00 (invierno)
     # Las dos corridas que se descartan terminan en segundos y casi no gastan
     # minutos de Actions.
-    - cron: '0 13,14,19,20 * * *'
+    #
+    # El barrido de la tarde se adelantó de las 16:00 a las 15:00 para que sus
+    # resultados estén disponibles antes de que termine la jornada.
+    - cron: '0 13,14,18,19 * * *'
   # A mano desde "Actions" -> "Run workflow": corre siempre, sea la hora que sea.
   workflow_dispatch: {}
 
@@ -35,10 +38,19 @@ permissions:
 jobs:
   descargar:
     runs-on: ubuntu-latest
-    # El corte de verdad lo pone el script (LIMITE_MINUTOS['dia'] = 100): se
-    # detiene solo tras guardar lo que lleve. De régimen esto son minutos, pero
-    # en horario de oficina el portal responde lento y conviene el margen.
-    timeout-minutes: 120
+    # Tiene que cubrir TODO lo que hace el job, no sólo la descarga:
+    #
+    #   descarga   100 min  (LIMITE_MINUTOS['dia'])
+    #   filtrado     ~6 min  (~2 por empresa)
+    #   seguimiento  55 min  (MINUTOS_SEGUIMIENTO['dia'])
+    #   arranque      ~3 min  (checkout + pip)
+    #   ------------------
+    #                164 min
+    #
+    # Estaba en 120 y por eso el 2026-08-19 GitHub cortó la corrida en mitad del
+    # seguimiento: la descarga sola ya se llevaba 100. Los dos cortes internos
+    # del script paran antes que esto; el timeout es sólo la red de seguridad.
+    timeout-minutes: 175
     # Mismo grupo que el barrido nocturno: dos barridos nunca escriben la tabla
     # a la vez. El que llegue segundo espera.
     concurrency:
@@ -56,7 +68,7 @@ jobs:
           if [ "${{ github.event_name }}" != "schedule" ]; then
             echo "Lanzado a mano (en Chile son las $hora): se corre igual."
             echo "toca=si" >> "$GITHUB_OUTPUT"
-          elif [ "$hora" = "10" ] || [ "$hora" = "16" ]; then
+          elif [ "$hora" = "10" ] || [ "$hora" = "15" ]; then
             echo "En Chile son las $hora: toca barrido."
             echo "toca=si" >> "$GITHUB_OUTPUT"
           else

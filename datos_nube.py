@@ -418,12 +418,23 @@ def seguimiento_vigentes() -> list:
     try:
         while True:
             def _consulta():
+                # Orden por ULTIMA REVISION, lo más viejo primero y lo nunca
+                # revisado antes que nada.
+                #
+                # Iba por `id`, y con un tope de revisiones por pasada eso
+                # significaba mirar SIEMPRE las mismas primeras: las del final
+                # de la lista no se actualizaban jamás. No era mala suerte, era
+                # sistemático. Así cada corrida ataca lo más rezagado y todo
+                # acaba pasando por el portal.
                 return (supabase.table(TABLA_SEGUIMIENTO)
                         .select("numero_adquisicion, llamado, "
-                                "fecha_cierre_1er_llamado, fecha_cierre_2do_llamado")
+                                "fecha_cierre_1er_llamado, fecha_cierre_2do_llamado, "
+                                "ultima_revision")
                         .eq("empresa_id", empresa_id)
                         .eq("estado_seguimiento", "vigente")
-                        .order("id").range(offset, offset + _TAM_PAGINA_SELECT - 1)
+                        .order("ultima_revision", desc=False, nullsfirst=True)
+                        .order("id")
+                        .range(offset, offset + _TAM_PAGINA_SELECT - 1)
                         .execute())
 
             datos = _exec(_consulta).data or []
