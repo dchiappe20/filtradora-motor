@@ -138,7 +138,13 @@ def _filtrar_y_seguir(empresas, modo):
     for empresa_id, nombre in empresas:
         try:
             res = seguimiento_compra_agil.filtrar_para_empresa(
-                empresa_id, nombre, df_crudo=df_crudo, log=escribir)
+                empresa_id, nombre, df_crudo=df_crudo,
+                # La descarga COMPLETA de la madrugada recorre los 30 días, así
+                # que su copia cruda manda y el seguimiento parte limpio. La del
+                # DÍA sólo lista lo de hoy: ahí la cruda está vieja para todo lo
+                # demás y no puede pisar lo que el seguimiento confirmó.
+                preservar_estado=(modo == "dia"),
+                log=escribir)
             total_cotizaciones += res.get("cotizaciones", 0)
         except Exception as e:
             con_error += 1

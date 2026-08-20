@@ -335,33 +335,41 @@ def codigos_vivos(nombre_tabla: str, columna_codigo: str = "numero_adquisicion")
 # cotización y mantener su estado al día.
 # ===========================================================================
 
-def primeras_detecciones() -> dict:
-    """{numero_adquisicion: marca ISO} de lo que la empresa ya venía siguiendo.
+def estado_seguimiento_previo() -> dict:
+    """{numero_adquisicion: {...}} de lo que la empresa ya venía siguiendo.
 
-    Cada refiltrado rehace el conjunto entero. Sin esto, la fecha de primera
-    detección se reiniciaría tres veces al día y se perdería lo único que
-    distingue una cotización recién aparecida de una que lleva días ahí.
+    Devuelve por cada código: `primera_deteccion`, `ultima_revision`,
+    `estado_seguimiento`, `llamado` y los dos cierres.
+
+    Hace falta porque cada refiltrado REHACE el conjunto desde `compra_agil`, y
+    esa tabla no siempre es la más fresca: la descarga diurna sólo lista lo
+    publicado HOY, así que una cotización de hace días que pasó a 2do llamado
+    esta mañana sigue figurando ahí como «1er llamado». Reconstruir a ciegas
+    pisaba con ese dato viejo lo que el seguimiento acababa de confirmar
+    preguntándole al portal, y el cambio de llamado no llegaba nunca a la
+    pantalla: se perdía en el siguiente barrido, una y otra vez.
     """
     if supabase is None:
         return {}
     try:
         empresa_id = empresa_actual()
-        vistas, offset = {}, 0
+        previo, offset = {}, 0
         while True:
             def _consulta():
                 return (supabase.table(TABLA_SEGUIMIENTO)
-                        .select("numero_adquisicion, primera_deteccion")
+                        .select("numero_adquisicion, primera_deteccion, ultima_revision, "
+                                "estado_seguimiento, llamado, "
+                                "fecha_cierre_1er_llamado, fecha_cierre_2do_llamado")
                         .eq("empresa_id", empresa_id).order("id")
                         .range(offset, offset + _TAM_PAGINA_SELECT - 1).execute())
 
             datos = _exec(_consulta).data or []
             for fila in datos:
                 codigo = str(fila.get("numero_adquisicion") or "")
-                marca = fila.get("primera_deteccion")
-                if codigo and marca and codigo not in vistas:
-                    vistas[codigo] = marca
+                if codigo and codigo not in previo:
+                    previo[codigo] = fila
             if len(datos) < _TAM_PAGINA_SELECT:
-                return vistas
+                return previo
             offset += _TAM_PAGINA_SELECT
     except Exception:
         return {}
