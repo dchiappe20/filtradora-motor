@@ -71,7 +71,63 @@ def _fijar_empresa(empresa_id, nombre=""):
 # 1. Filtrar
 # ---------------------------------------------------------------------------
 
-def filtrar_para_empresa(empresa_id, nombre="", df_crudo=None, log=print):
+def _conservar_seguimiento(df, previas, ahora, preservar_estado):
+    """Rellena las columnas de seguimiento respetando lo que ya se sabía.
+
+    `primera_deteccion` se conserva SIEMPRE: es lo único que distingue una
+    cotización recién aparecida de una que la empresa lleva días mirando.
+
+    El estado (llamado, cierres, última revisión) se conserva cuando
+    `preservar_estado` es True Y esa cotización ya fue consultada al portal
+    —lo dice `ultima_revision`—. El motivo es que `df` viene de la copia cruda
+    de `compra_agil`, y ésa NO siempre es la más fresca:
+
+      · La descarga del DÍA sólo lista lo publicado hoy. Una cotización de hace
+        días que pasó a 2do llamado esta mañana sigue ahí como «1er llamado».
+        Escribir ese valor pisaría lo que el seguimiento acaba de confirmar
+        preguntándole al portal, y en la pantalla el cambio de llamado no
+        llegaría nunca: cada barrido lo revertía.
+
+      · La descarga COMPLETA de la madrugada sí recorre los 30 días y trae el
+        llamado al día para toda la ventana. Ahí la cruda manda, y el barrido
+        llama con `preservar_estado=False` para que el seguimiento parta limpio.
+    """
+    codigos = df[_COL_ID].astype(str)
+
+    df["Primera Detección"] = codigos.map(
+        lambda c: (previas.get(c) or {}).get("primera_deteccion") or ahora)
+
+    if not preservar_estado:
+        df["Estado Seguimiento"] = "vigente"
+        df["Última Revisión"] = ""
+        return df
+
+    def _previo(codigo, campo, por_defecto=""):
+        anterior = previas.get(codigo) or {}
+        # Sin `ultima_revision` nunca se le preguntó al portal por ella, así que
+        # lo que traiga la copia cruda es lo mejor que hay.
+        if not anterior.get("ultima_revision"):
+            return None
+        return anterior.get(campo) or por_defecto
+
+    def _mezclar(columna, campo):
+        return [
+            (_previo(c, campo) if _previo(c, campo) is not None else actual)
+            for c, actual in zip(codigos, df[columna])
+        ]
+
+    df[_COL_LLAMADO] = _mezclar(_COL_LLAMADO, "llamado")
+    df[_COL_CIERRE1] = _mezclar(_COL_CIERRE1, "fecha_cierre_1er_llamado")
+    df[_COL_CIERRE2] = _mezclar(_COL_CIERRE2, "fecha_cierre_2do_llamado")
+    df["Última Revisión"] = codigos.map(
+        lambda c: (previas.get(c) or {}).get("ultima_revision") or "")
+    df["Estado Seguimiento"] = codigos.map(
+        lambda c: (previas.get(c) or {}).get("estado_seguimiento") or "vigente")
+    return df
+
+
+def filtrar_para_empresa(empresa_id, nombre="", df_crudo=None,
+                         preservar_estado=True, log=print):
     """Aplica los filtros de la empresa y guarda el conjunto. -> dict con el resumen.
 
     `df_crudo` se pasa ya leído cuando se recorren varias empresas: la copia de
@@ -115,15 +171,10 @@ def filtrar_para_empresa(empresa_id, nombre="", df_crudo=None, log=print):
         despues = df_filtrado[_COL_ID].nunique() if not df_filtrado.empty else 0
         log(f"  {nombre}: preferencia '{preferencia}' deja {despues} de {antes}.")
 
-    # `primera_deteccion` se conserva: es lo único que distingue una cotización
-    # recién aparecida de una que la empresa lleva días mirando.
-    previas = datos_nube.primeras_detecciones()
+    previas = datos_nube.estado_seguimiento_previo()
     ahora = _ahora_iso()
     df_filtrado = df_filtrado.copy()
-    df_filtrado["Primera Detección"] = df_filtrado[_COL_ID].astype(str).map(
-        lambda c: previas.get(c, ahora))
-    df_filtrado["Estado Seguimiento"] = "vigente"
-    df_filtrado["Última Revisión"] = ""
+    df_filtrado = _conservar_seguimiento(df_filtrado, previas, ahora, preservar_estado)
 
     filas = datos_nube.guardar_seguimiento(df_filtrado)
     cotizaciones = df_filtrado[_COL_ID].nunique()
