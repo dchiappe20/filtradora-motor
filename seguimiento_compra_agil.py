@@ -11,7 +11,7 @@ Dos trabajos, los dos POR EMPRESA, que corren dentro del barrido:
   · `revisar_estado`  — vuelve a preguntarle al portal por cada cotización que
     la empresa está siguiendo y actualiza su llamado y sus cierres. Es lo que
     da el «seguimiento»: hasta ahora, entre barridos completos, una cotización
-    con el primer cierre vencido sólo se podía mostrar como «Revisar en web».
+    con el primer cierre vencido sólo se podía mostrar como «Por confirmar».
 
 Lo que hace esto viable es el tamaño: el conjunto filtrado son cientos de
 cotizaciones, no las ~38.000 de la ventana. Pedirle al portal una ficha por cada
@@ -232,6 +232,28 @@ def revisar_estado(empresa_id, nombre="", corte=None, log=print):
         datos_nube.cerrar_seguimiento(ya_cerradas)
 
     por_revisar = [v for v in vigentes if v["codigo"] not in set(ya_cerradas)]
+
+    # Las que el usuario ve como «Por confirmar» van PRIMERO.
+    #
+    # Son las que tienen el 1er cierre vencido y siguen figurando en 1er
+    # llamado: exactamente las que el portal ya movió y nosotros todavía no
+    # sabemos a dónde. Son las únicas cuyo estado va a cambiar de verdad, y las
+    # únicas que en pantalla se ven "sin resolver".
+    #
+    # Importa cuando el tiempo no alcanza para todas: con varias empresas cada
+    # una recibe una porción del presupuesto, y es mucho mejor gastarla en las
+    # veinte que están en el aire que en las trescientas que siguen igual.
+    # `vigentes` ya viene de lo más rezagado a lo más reciente, y `sorted` es
+    # estable, así que ese orden se conserva dentro de cada grupo.
+    def _por_confirmar(v):
+        return (str(v["llamado"]).strip() == "1er llamado"
+                and _vencida(v["cierre1"], ahora))
+
+    por_revisar = sorted(por_revisar, key=lambda v: not _por_confirmar(v))
+    urgentes = sum(1 for v in por_revisar if _por_confirmar(v))
+    if urgentes:
+        log(f"  {nombre}: {urgentes} por confirmar, van primero.")
+
     if len(por_revisar) > MAX_REVISIONES:
         por_revisar = por_revisar[:MAX_REVISIONES]
 
