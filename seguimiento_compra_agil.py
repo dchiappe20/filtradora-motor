@@ -262,6 +262,7 @@ def revisar_estado(empresa_id, nombre="", corte=None, log=print):
     fallidas = 0
     revisadas = 0
     sin_tiempo = False
+    portal_caido = False
 
     def _revisar(entrada):
         ficha = compra_agil_api._obtener_ficha(entrada["codigo"])
@@ -296,6 +297,7 @@ def revisar_estado(empresa_id, nombre="", corte=None, log=print):
             break
 
         lote = por_revisar[i:i + LOTE_REVISION]
+        fallidas_lote = 0
         with ThreadPoolExecutor(max_workers=HILOS_REVISION) as pool:
             futuros = {pool.submit(_revisar, v): v for v in lote}
             for futuro in as_completed(futuros):
@@ -311,6 +313,7 @@ def revisar_estado(empresa_id, nombre="", corte=None, log=print):
                     # El portal no la sirvió. No se toca nada: puede ser un fallo
                     # pasajero, y darla por cerrada la escondería de la pantalla.
                     fallidas += 1
+                    fallidas_lote += 1
                     continue
 
                 try:
@@ -319,6 +322,16 @@ def revisar_estado(empresa_id, nombre="", corte=None, log=print):
                 except datos_nube.ErrorNube:
                     fallidas += 1
 
+        # Un lote entero fallido con el primero es el portal caido, no mala
+        # suerte: insistir 55 minutos contra timeouts no recupera nada y deja al
+        # resto de las empresas sin su turno. Se corta y se reintenta en la
+        # proxima corrida.
+        if i == 0 and fallidas_lote == len(lote):
+            log(f"  {nombre}: el portal no sirvió ninguna de las primeras "
+                f"{len(lote)} fichas; se deja para la próxima corrida.")
+            portal_caido = True
+            break
+
     pendientes = len(por_revisar) - revisadas
     cola = (f", {pendientes} para la próxima corrida" if sin_tiempo and pendientes > 0 else "")
     log(f"  {nombre}: revisadas {revisadas} de {len(por_revisar)}, {cambios} con cambio "
@@ -326,4 +339,4 @@ def revisar_estado(empresa_id, nombre="", corte=None, log=print):
         f"no sirvió{cola}.")
     return {"revisadas": revisadas, "cerradas": len(ya_cerradas), "cambios": cambios,
             "fallidas": fallidas, "pendientes": max(0, pendientes),
-            "sin_tiempo": sin_tiempo}
+            "sin_tiempo": sin_tiempo, "portal_caido": portal_caido}
