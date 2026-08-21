@@ -456,7 +456,7 @@ def gestionar_descarga_ultimas(callback_estado=None, cancel_event=None,
     dos modos, sin pedirle nada al portal:
 
       · vencido el 2do cierre, la cotización se suelta de la tabla;
-      · vencido el 1er cierre, la pantalla la muestra como «Revisar en web»
+      · vencido el 1er cierre, la pantalla la muestra como «Por confirmar»
         hasta que el nocturno confirme en qué quedó (`_llamado_visible`).
 
     Con `limite_minutos` la corrida se corta sola al agotarse ese tiempo, después
