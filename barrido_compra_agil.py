@@ -8,7 +8,7 @@ nada, sólo lee de la nube. Corre tres veces al día, todas programadas:
   · 01:00 (madrugada)  → modo `completo`: recorre los últimos DIAS_VENTANA días.
                          Es el único que vuelve sobre los días viejos, así que es
                          el que detecta los pasos a 2do llamado y los cierres.
-  · 10:00 y 16:00      → modo `dia`: lista SÓLO lo publicado hoy. Además suelta
+  · 10:00 y 15:00      → modo `dia`: lista SÓLO lo publicado hoy. Además suelta
                          de la tabla lo que ya tiene el 2do cierre vencido, que
                          se sabe por la fecha guardada sin preguntarle al portal.
 
@@ -249,10 +249,26 @@ def main():
     # primera página, salió «Sin novedades» y el job terminó bien— y desde fuera
     # era indistinguible de un día tranquilo.
     if dias_fallidos and not descargadas:
+        # Que se caiga el LISTADO no dice nada sobre lo demás: las fichas son
+        # otro endpoint del portal, y el filtrado no lo toca en absoluto (lee de
+        # la nube). Así que se intenta igual antes de rendirse.
+        #
+        # Importa de verdad: el 2026-08-20 a las 10:00 el listado no respondió y
+        # la corrida se cortó aquí, de modo que ese día nadie revisó el estado de
+        # las cotizaciones ya seguidas hasta las 15:00. El portal estaba caído
+        # para listar, pero las fichas se servían igual.
+        print("El listado no respondió, pero el filtrado y el seguimiento no "
+              "dependen de él: se intentan igual.", flush=True)
+        resumen_seg = _filtrar_y_seguir(empresas, modo)
+
         detalle = (f"{etiqueta} fallido: el portal no respondió al listar "
                    f"{len(dias_fallidos)} día(s) y no se bajó nada.")
+        if resumen_seg:
+            detalle = f"{detalle} {resumen_seg}"
         _avisar_a_todas(empresas, "error", detalle)
         print(f"ERROR: {detalle}", flush=True)
+        # Sigue siendo un fallo: no traer lo nuevo del día es no hacer el
+        # trabajo, y tiene que verse rojo en Actions.
         return 1
 
     if not resultado.get("completo"):
