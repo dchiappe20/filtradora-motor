@@ -141,7 +141,8 @@ def _escribir_sesion(datos: dict) -> None:
 
 
 def guardar_sesion(email: str, rol: str = None, empresa: str = None,
-                   logo_url: str = None, empresa_id: str = None) -> None:
+                   logo_url: str = None, empresa_id: str = None,
+                   nombre: str = None) -> None:
     """Actualiza la sesión conservando lo que ya hubiera.
 
     El merge importa: los tokens de Supabase Auth viven en el mismo archivo, y
@@ -161,6 +162,11 @@ def guardar_sesion(email: str, rol: str = None, empresa: str = None,
             datos["rol"] = rol
         if empresa:
             datos["empresa"] = empresa
+        # El nombre lo manda el registro central (core.usuarios.nombre_completo).
+        # La app no lo guarda en ningún otro sitio ni deja editarlo: si está mal,
+        # se corrige en Themein y llega solo en la siguiente revalidación.
+        if nombre:
+            datos["nombre"] = nombre
         if empresa_id:
             datos["empresa_id"] = empresa_id
         # logo_url puede volver a None a propósito (se quitó el logo en el panel).
