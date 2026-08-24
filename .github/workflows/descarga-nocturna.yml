@@ -61,4 +61,4 @@ jobs:
           # El runner corre en UTC; sin esto, «hoy» sería el día siguiente
           # durante toda la madrugada chilena y la ventana quedaría corrida.
           TZ: America/Santiago
-        run: python barrido_compra_agil.py completo
+        run: python barrido_compra_agil.py completo noche

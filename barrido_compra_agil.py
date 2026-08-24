@@ -3,21 +3,38 @@
 barrido_compra_agil.py — Barrido automático de Compra Ágil (headless, GitHub Actions).
 
 Es el ÚNICO camino por el que entran datos de Compra Ágil: la app ya no descarga
-nada, sólo lee de la nube. Corre tres veces al día, todas programadas:
+nada, sólo lee de la nube. Corre en cuatro RANURAS al día, todas programadas:
 
-  · 01:00 (madrugada)  → modo `completo`: recorre los últimos DIAS_VENTANA días.
-                         Es el único que vuelve sobre los días viejos, así que es
-                         el que detecta los pasos a 2do llamado y los cierres.
-  · 10:00 y 15:00      → modo `dia`: lista SÓLO lo publicado hoy. Además suelta
-                         de la tabla lo que ya tiene el 2do cierre vencido, que
-                         se sabe por la fecha guardada sin preguntarle al portal.
+  · 01:00 (madrugada)  → modo `completo`, ranura `noche`: recorre los últimos
+                         DIAS_VENTANA días. Es el único que vuelve sobre los
+                         días viejos, así que es el que detecta los pasos a 2do
+                         llamado y los cierres.
+  · 10:00 / 12:00 / 15:00 → modo `dia`, ranuras `manana` / `mediodia` / `tarde`:
+                         listan SÓLO lo publicado hoy. Además sueltan de la
+                         tabla lo que ya tiene el 2do cierre vencido, que se
+                         sabe por la fecha guardada sin preguntarle al portal.
+
+DESCARGAR y FILTRAR son cosas distintas, y el plan sólo manda sobre la segunda.
 
 Los datos de Compra Ágil son públicos e idénticos para todas las empresas, así
-que se guarda UNA sola copia compartida (`empresa_id` NULL) que todas leen. Lo
-que sí es por empresa es el ESTADO de la descarga (`descarga_estado`), que cada
-app sondea para mostrar el avance y refrescarse sola al terminar.
+que se guarda UNA sola copia compartida (`empresa_id` NULL) que todas leen: esa
+descarga se hace siempre y beneficia a todo el mundo, pague lo que pague. Lo que
+sí es por empresa —y por tanto lo que el plan limita— es el FILTRADO, que deja
+el resultado en `compra_agil_seguimiento`, y el SEGUIMIENTO de estado. Un plan
+con `barridos_dia: 1` sigue leyendo la ventana completa de 30 días; lo que tiene
+es que su conjunto filtrado se refresca una vez al día en vez de tres.
 
-Uso:  python barrido_compra_agil.py [completo|dia]     (por defecto: completo)
+También es por empresa el ESTADO de la descarga (`descarga_estado`), que cada
+app sondea para mostrar el avance y refrescarse sola al terminar. Se avisa sólo
+a quien le toca esta ranura: anunciarle un barrido a quien no va a ver ningún
+dato nuevo es peor que no decirle nada.
+
+Uso:  python barrido_compra_agil.py [completo|dia] [ranura]
+
+      La ranura por defecto es `noche` para `completo` y `todas` para `dia`.
+      `todas` no mira el plan y filtra a todo el mundo: es lo que corresponde
+      cuando alguien lanza el barrido a mano desde Actions, y además deja que
+      un workflow todavía sin actualizar se comporte como antes.
 
 Códigos de salida: 0 si el barrido terminó (aunque sea parcial por tiempo o
 porque el portal dejó caer páginas, mientras algo se haya bajado); 1 si falló o
@@ -50,6 +67,32 @@ LIMITE_MINUTOS = {"completo": 300, "dia": 100}
 # más el arranque (checkout + pip ≈ 3 min), o GitHub corta igual.
 MINUTOS_SEGUIMIENTO = {"completo": 0, "dia": 55}
 
+# Ranuras del día y a quién alcanza cada una.
+#
+# El plan dice CUÁNTAS veces al día se refiltra a una empresa (`barridos_dia`);
+# esta tabla dice CUÁLES, que es lo que el motor necesita saber.
+#
+# El plan de un solo barrido va al MEDIODÍA y no a las 10:00: un único refresco
+# al filo de la jornada recoge lo publicado por la mañana y deja la tarde entera
+# para reaccionar. A las 10:00 se habría perdido casi todo el día, y a las 15:00
+# llegaría tarde para preparar una oferta.
+RANURAS_POR_PLAN = {
+    1: ("mediodia",),
+    2: ("noche", "mediodia"),
+    3: ("noche", "manana", "tarde"),
+}
+
+RANURAS_VALIDAS = ("noche", "manana", "mediodia", "tarde", "todas")
+
+# La única ranura que puede saltarse entera cuando no le toca a nadie.
+#
+# Las otras tres no: aunque no hubiera a quién filtrar, su DESCARGA alimenta la
+# copia compartida que leen todas las empresas. La del mediodía es la excepción
+# porque las de las 10:00 y las 15:00 ya cubren el mismo día, así que mientras no
+# haya ningún cliente de un solo barrido esa corrida no aporta nada y sí gasta
+# minutos de Actions.
+RANURAS_OMITIBLES = ("mediodia",)
+
 _ultimo_estado = {"t": 0.0}  # throttle de escrituras de estado a la nube
 
 
@@ -71,12 +114,56 @@ def _log(mensaje, progreso=None):
 
 
 def _empresas_objetivo():
-    """[(empresa_id, nombre)] de las empresas ACTIVA con la app 'filt' ACTIVA.
-    Vía función SECURITY DEFINER en core (la service_role no tiene grants directos)."""
+    """Empresas ACTIVA con la app 'filt' ACTIVA, tal como las da core.
+
+    Cada una trae `id`, `nombre` y —desde 28_barridos_por_plan.sql— `plan` y
+    `limites`. Vía función SECURITY DEFINER en core (la service_role no tiene
+    grants directos).
+    """
     resp = auth.supabase.schema("core").rpc(
         "empresas_de_app", {"p_codigo_app": auth.CODIGO_APP}).execute()
-    datos = resp.data or []
-    return [(str(e["id"]), e.get("nombre", "")) for e in datos if e.get("id")]
+    return [e for e in (resp.data or []) if e.get("id")]
+
+
+def _barridos_del_plan(empresa):
+    """Cuántos barridos al día tiene contratados. None es «sin tope».
+
+    Devuelve None también cuando el dato no viene: una base sin
+    28_barridos_por_plan.sql no manda `limites`, y ante la duda se filtra de
+    más. Quedarse corto sería dejar a un cliente sin datos por un despliegue a
+    medias.
+    """
+    limites = empresa.get("limites")
+    if not isinstance(limites, dict):
+        return None
+    valor = limites.get("barridos_dia")
+    if valor is None:
+        return None
+    try:
+        return int(valor)
+    except (TypeError, ValueError):
+        return None
+
+
+def _le_toca(empresa, ranura):
+    """¿Se filtra a esta empresa en esta ranura?"""
+    if ranura == "todas":
+        return True
+
+    cuantos = _barridos_del_plan(empresa)
+    if cuantos is None:
+        return True          # sin tope: todas las ranuras
+    if cuantos <= 0:
+        return False         # un plan sin barridos; hoy no existe ninguno así
+    if cuantos >= 3:
+        return ranura in RANURAS_POR_PLAN[3]
+    return ranura in RANURAS_POR_PLAN[cuantos]
+
+
+def _para_filtrar(empresas, ranura):
+    """[(empresa_id, nombre)] de las que toca filtrar en esta ranura."""
+    return [(str(e["id"]), e.get("nombre", ""))
+            for e in empresas if _le_toca(e, ranura)]
 
 
 def _fijar_empresa(empresa_id, nombre):
@@ -108,6 +195,13 @@ def _filtrar_y_seguir(empresas, modo):
     traer un solo dato nuevo.
     """
     from helpers import id_corto
+
+    # Sin nadie a quien filtrar no hay por qué bajarse los ~15 MB de la copia
+    # compartida. Pasa cuando la ranura no le toca a ninguna empresa y aun asi
+    # la descarga se hizo, que es lo correcto: de ella comen las demas rondas.
+    if not empresas:
+        print("  Ninguna empresa toca en esta ranura: no hay nada que filtrar.", flush=True)
+        return ""
 
     try:
         df_crudo = datos_nube.leer_tabla(compra_agil_api.TABLA_NUBE)
@@ -201,26 +295,56 @@ def main():
         print(f"ERROR: modo '{modo}' desconocido (usa 'completo' o 'dia').", flush=True)
         return 1
 
+    # Sin ranura explícita, el comportamiento es el de antes de los planes: el
+    # nocturno es la ranura `noche` y el del día alcanza a todo el mundo. Así un
+    # workflow todavía sin actualizar —viven en otro repositorio y no se
+    # despliegan a la vez— no deja a nadie sin filtrar.
+    por_defecto = "noche" if modo == "completo" else "todas"
+    ranura = (sys.argv[2] if len(sys.argv) > 2 else por_defecto).strip().lower()
+    if ranura not in RANURAS_VALIDAS:
+        print(f"ERROR: ranura '{ranura}' desconocida "
+              f"(usa {', '.join(RANURAS_VALIDAS)}).", flush=True)
+        return 1
+
     if auth.supabase is None:
         print("ERROR: no hay cliente Supabase (credenciales o conexión).", flush=True)
         return 1
 
     try:
-        empresas = _empresas_objetivo()
+        todas = _empresas_objetivo()
     except Exception as e:
         print(f"ERROR al listar empresas desde core: {e}", flush=True)
         return 1
 
-    if not empresas:
+    if not todas:
         print(f"No hay empresas activas con la app '{auth.CODIGO_APP}'. Nada que barrer.", flush=True)
+        return 0
+
+    empresas = _para_filtrar(todas, ranura)
+
+    fuera = [e.get("nombre", "") for e in todas
+             if not _le_toca(e, ranura)]
+    if fuera:
+        print(f"Ranura '{ranura}': fuera de esta ronda por su plan "
+              f"({len(fuera)}): {', '.join(fuera)}.", flush=True)
+
+    # Una ranura sin nadie a quien filtrar sólo se salta si otra del mismo día
+    # ya alimenta la copia compartida; si no, la descarga se hace igual porque
+    # de ella comen todas las empresas.
+    if not empresas and ranura in RANURAS_OMITIBLES:
+        print(f"Ranura '{ranura}': ninguna empresa la tiene contratada y las "
+              "otras rondas ya cubren la descarga del día. No se corre nada.",
+              flush=True)
         return 0
 
     if modo == "completo":
         print(f"Barrido COMPLETO de Compra Ágil (últimos {compra_agil_api.DIAS_VENTANA} "
-              f"días) — copia compartida para {len(empresas)} empresa(s).", flush=True)
+              f"días) — copia compartida; se filtra para {len(empresas)} de "
+              f"{len(todas)} empresa(s).", flush=True)
     else:
-        print(f"Barrido DEL DÍA de Compra Ágil (sólo lo publicado hoy) — "
-              f"copia compartida para {len(empresas)} empresa(s).", flush=True)
+        print(f"Barrido DEL DÍA de Compra Ágil (sólo lo publicado hoy), ranura "
+              f"'{ranura}' — copia compartida; se filtra para {len(empresas)} de "
+              f"{len(todas)} empresa(s).", flush=True)
 
     _ultimo_estado["t"] = 0.0
     try:
