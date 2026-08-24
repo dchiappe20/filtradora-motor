@@ -1,8 +1,20 @@
-name: Barridos diurnos Compra Ágil (10:00 y 16:00 Chile)
+name: Barridos diurnos Compra Ágil (10:00, 12:00 y 15:00 Chile)
 
-# Barridos CORTOS, dos veces al día: listan SÓLO lo publicado hoy, para que las
+# Barridos CORTOS, tres veces al día: listan SÓLO lo publicado hoy, para que las
 # cotizaciones nuevas no esperen hasta la madrugada. No vuelven sobre los días
 # anteriores.
+#
+# Cada hora es una RANURA, y el plan de cada empresa decide en cuáles se le
+# filtra (ver RANURAS_POR_PLAN en barrido_compra_agil.py):
+#
+#   10:00  manana     |  planes de 3 barridos al día
+#   12:00  mediodia   |  planes de 1 barrido al día
+#   15:00  tarde      |  planes de 3 barridos al día
+#
+# La DESCARGA no se reparte: es una copia compartida y la leen todas las
+# empresas, pague lo que pague cada una. Lo que el plan limita es el filtrado.
+# Por eso la ranura del mediodía se salta entera si ningún cliente la tiene
+# contratada: las de las 10:00 y las 15:00 ya cubren la descarga de ese día.
 #
 # De paso sueltan de la tabla lo que ya tiene el 2do cierre vencido, que se sabe
 # con la fecha guardada sin preguntarle nada al portal.
@@ -18,14 +30,16 @@ on:
     # corresponda según la hora real en Chile:
     #   13:00 UTC = 10:00 (verano) | 09:00 (invierno)
     #   14:00 UTC = 11:00 (verano) | 10:00 (invierno)
+    #   15:00 UTC = 12:00 (verano) | 11:00 (invierno)
+    #   16:00 UTC = 13:00 (verano) | 12:00 (invierno)
     #   18:00 UTC = 15:00 (verano) | 14:00 (invierno)
     #   19:00 UTC = 16:00 (verano) | 15:00 (invierno)
-    # Las dos corridas que se descartan terminan en segundos y casi no gastan
+    # Las tres corridas que se descartan terminan en segundos y casi no gastan
     # minutos de Actions.
     #
     # El barrido de la tarde se adelantó de las 16:00 a las 15:00 para que sus
     # resultados estén disponibles antes de que termine la jornada.
-    - cron: '0 13,14,18,19 * * *'
+    - cron: '0 13,14,15,16,18,19 * * *'
   # A mano desde "Actions" -> "Run workflow": corre siempre, sea la hora que sea.
   workflow_dispatch: {}
 
@@ -61,16 +75,26 @@ jobs:
       # barrido (que necesita saber qué día es «hoy» allá).
       TZ: America/Santiago
     steps:
-      - name: ¿Toca barrido a esta hora en Chile?
+      - name: ¿Toca barrido a esta hora en Chile, y de qué ranura?
         id: horario
         run: |
           hora=$(date +%H)
+          case "$hora" in
+            10) ranura=manana ;;
+            12) ranura=mediodia ;;
+            15) ranura=tarde ;;
+            *)  ranura= ;;
+          esac
           if [ "${{ github.event_name }}" != "schedule" ]; then
-            echo "Lanzado a mano (en Chile son las $hora): se corre igual."
+            # A mano se filtra para TODAS: quien pulsa el botón quiere ver el
+            # efecto ya, no acordarse de qué plan cae en qué hora.
+            echo "Lanzado a mano (en Chile son las $hora): se corre para todas las empresas."
             echo "toca=si" >> "$GITHUB_OUTPUT"
-          elif [ "$hora" = "10" ] || [ "$hora" = "15" ]; then
-            echo "En Chile son las $hora: toca barrido."
+            echo "ranura=todas" >> "$GITHUB_OUTPUT"
+          elif [ -n "$ranura" ]; then
+            echo "En Chile son las $hora: toca el barrido de la ranura '$ranura'."
             echo "toca=si" >> "$GITHUB_OUTPUT"
+            echo "ranura=$ranura" >> "$GITHUB_OUTPUT"
           else
             echo "En Chile son las $hora: esta corrida es la del otro huso, se salta."
             echo "toca=no" >> "$GITHUB_OUTPUT"
@@ -97,4 +121,4 @@ jobs:
           # service_role: el runner recorre las empresas de `core` (salta RLS) y
           # escribe en cada una. El código acota todo por empresa_id.
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        run: python barrido_compra_agil.py dia
+        run: python barrido_compra_agil.py dia ${{ steps.horario.outputs.ranura }}
