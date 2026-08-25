@@ -108,7 +108,60 @@ RANURAS_VALIDAS = ("noche", "manana", "mediodia", "tarde", "todas")
 # Actions.
 RANURAS_OMITIBLES = ("mediodia",)
 
+# Cuánto del total pesa cada fase, para que la barra de la app avance MONÓTONA.
+# Una que vuelve a cero tres veces no informa: desconcierta.
+#
+# Los tramos salen de lo que dura cada cosa de verdad. En el barrido del día la
+# descarga tiene 100 minutos de presupuesto y el seguimiento 55, y el filtrado
+# son un par de minutos por empresa; en el nocturno no hay seguimiento, así que
+# su tramo se lo reparten las otras dos.
+PESOS = {
+    "completo": {"descarga": (0, 85), "filtrado": (85, 100), "seguimiento": (100, 100)},
+    "dia":      {"descarga": (0, 60), "filtrado": (60, 80),  "seguimiento": (80, 100)},
+}
+
+# A quién se le cuenta el avance y en qué fase va. Lo fija `main()` antes de
+# empezar; `_log` lo lee sin tener que recibirlo por parámetro, porque quien lo
+# llama es `compra_agil_api`, que no sabe nada de empresas ni de fases.
+_avance = {"modo": "dia", "fase": "descarga", "empresas": []}
+
 _ultimo_estado = {"t": 0.0}  # throttle de escrituras de estado a la nube
+
+
+def _fijar_fase(fase, empresas=None):
+    _avance["fase"] = fase
+    if empresas is not None:
+        _avance["empresas"] = [e for e, _n in empresas]
+    _ultimo_estado["t"] = 0.0   # que el cambio de fase se publique ya
+
+
+def _progreso_global(progreso_de_fase):
+    """El 0..100 de una fase, llevado al 0..100 del trabajo entero."""
+    if progreso_de_fase is None:
+        return None
+    desde, hasta = PESOS.get(_avance["modo"], PESOS["dia"])[_avance["fase"]]
+    fraccion = max(0.0, min(100.0, float(progreso_de_fase))) / 100.0
+    return int(round(desde + (hasta - desde) * fraccion))
+
+
+def _publicar(estado, detalle, progreso=None, forzar=False):
+    """Deja el avance en la nube para todas las empresas de esta ronda.
+
+    Va a todas y no a una porque la descarga es una copia compartida: su avance
+    le interesa a cualquiera que tenga la pantalla abierta. Con el throttle de
+    4 segundos son unas 20 escrituras por hora de barrido, todas en una sola
+    petición.
+    """
+    ahora = time.time()
+    if not forzar and ahora - _ultimo_estado["t"] < 4:
+        return
+    _ultimo_estado["t"] = ahora
+    try:
+        datos_nube.escribir_estado_varias(
+            _MODULO, _avance["empresas"], estado, detalle,
+            progreso=progreso, fase=_avance["fase"])
+    except Exception:
+        pass  # informar del avance no puede tumbar el barrido
 
 
 def _log(mensaje, progreso=None):
@@ -119,13 +172,10 @@ def _log(mensaje, progreso=None):
         print(f"[{marca}] {mensaje} ({progreso:.0f}%)", flush=True)
     else:
         print(f"[{marca}] {mensaje}", flush=True)
-    ahora = time.time()
-    if ahora - _ultimo_estado["t"] >= 4:
-        _ultimo_estado["t"] = ahora
-        try:
-            datos_nube.escribir_estado_descarga(_MODULO, "corriendo", mensaje)
-        except Exception:
-            pass
+    # El porcentaje ya venía calculado desde `compra_agil_api` y hasta ahora se
+    # imprimía y se tiraba: a la nube subía sólo el texto, así que la app podía
+    # decir «barrido en curso» y poco más.
+    _publicar("corriendo", mensaje, _progreso_global(progreso))
 
 
 def _empresas_objetivo():
@@ -187,14 +237,17 @@ def _fijar_empresa(empresa_id, nombre):
 
 
 def _avisar_a_todas(empresas, estado, detalle):
-    """Deja el mismo estado de descarga en todas las empresas. Es lo único que
-    sigue siendo por empresa: los datos ya son una copia compartida."""
-    for empresa_id, nombre in empresas:
-        _fijar_empresa(empresa_id, nombre)
-        try:
-            datos_nube.escribir_estado_descarga(_MODULO, estado, detalle)
-        except Exception as e:
-            print(f"  (no se pudo avisar a {nombre}: {e})", flush=True)
+    """Deja el mismo estado, y el mismo final, en todas las empresas.
+
+    El `progreso=None` no sobra: al terminar hay que BORRAR el porcentaje de la
+    corrida, o la app se quedaría con una barra al 73% hasta el barrido
+    siguiente.
+    """
+    ids = [e for e, _n in empresas]
+    escritas = datos_nube.escribir_estado_varias(
+        _MODULO, ids, estado, detalle, progreso=None, fase=None)
+    if escritas != len(ids):
+        print(f"  (no se pudo avisar a todas: {escritas} de {len(ids)})", flush=True)
 
 
 def _filtrar_y_seguir(empresas, modo):
@@ -244,7 +297,14 @@ def _filtrar_y_seguir(empresas, modo):
     # Va primero y sin reloj porque es lo esencial y lo barato: sin filtrar, la
     # app no ve las cotizaciones nuevas. Son ~1-2 minutos por empresa.
     print(f"Filtrando para {len(empresas)} empresa(s)...", flush=True)
-    for empresa_id, nombre in empresas:
+    _fijar_fase("filtrado")
+    for indice, (empresa_id, nombre) in enumerate(empresas):
+        # El avance de esta fase es cuántas empresas van, no cuánto lleva cada
+        # una: `filtrar_para_empresa` es una sola pasada y no informa por dentro.
+        _publicar("corriendo",
+                  f"Filtrando para {nombre} ({indice + 1} de {len(empresas)})...",
+                  _progreso_global(100 * indice / max(len(empresas), 1)),
+                  forzar=True)
         try:
             res = seguimiento_compra_agil.filtrar_para_empresa(
                 empresa_id, nombre, df_crudo=df_crudo,
@@ -278,7 +338,12 @@ def _filtrar_y_seguir(empresas, modo):
     print(f"Revisando el estado de lo seguido ({MINUTOS_SEGUIMIENTO[modo]} min "
           f"para {len(empresas)} empresa(s))...", flush=True)
 
+    _fijar_fase("seguimiento")
     for i, (empresa_id, nombre) in enumerate(empresas):
+        _publicar("corriendo",
+                  f"Revisando el estado de {nombre} ({i + 1} de {len(empresas)})...",
+                  _progreso_global(100 * i / max(len(empresas), 1)),
+                  forzar=True)
         restantes = len(empresas) - i
         corte = min(fin, time.monotonic() + (fin - time.monotonic()) / restantes)
         if time.monotonic() >= fin:
@@ -361,7 +426,11 @@ def main():
               f"'{ranura}' — copia compartida; se filtra para {len(empresas)} de "
               f"{len(todas)} empresa(s).", flush=True)
 
-    _ultimo_estado["t"] = 0.0
+    # A partir de aquí `_log` sabe a quién contarle el avance y en qué fase va.
+    _avance["modo"] = modo
+    _fijar_fase("descarga", empresas)
+    _publicar("corriendo", "Empezando el barrido...", 0, forzar=True)
+
     try:
         resultado = compra_agil_api.gestionar_descarga_ultimas(
             callback_estado=_log, limite_minutos=LIMITE_MINUTOS[modo],

@@ -507,26 +507,42 @@ def cerrar_seguimiento(codigos) -> int:
     return len(codigos)
 
 
-def escribir_estado_descarga(modulo: str, estado: str, detalle: str = ""):
+def _fila_estado(empresa_id, modulo, estado, detalle, progreso, fase):
+    """La fila de `descarga_estado` tal como se guarda. Un solo sitio."""
+    fila = {
+        "empresa_id": empresa_id,
+        "modulo": modulo,
+        "estado": estado,
+        "detalle": detalle,
+        "actualizado": datetime.now(timezone.utc).isoformat(),
+    }
+    # Se mandan aunque vayan en None: al terminar hay que BORRAR el porcentaje
+    # de la corrida anterior, o la app pintaría una barra al 73% para siempre.
+    fila["progreso"] = None if progreso is None else max(0, min(100, int(progreso)))
+    fila["fase"] = fase
+
+    run_id = os.environ.get("GITHUB_RUN_ID", "").strip()
+    if run_id.isdigit():
+        fila["run_id"] = int(run_id)
+    return fila
+
+
+def escribir_estado_descarga(modulo: str, estado: str, detalle: str = "",
+                             progreso=None, fase: str = None):
     """Registra el estado de una descarga que corre en el servidor (GitHub Actions)
     en la tabla `descarga_estado`, para que la app pueda sondearlo. `estado` es uno
     de: 'corriendo', 'listo', 'error'. Un único registro por `modulo` (upsert).
+
+    `progreso` (0..100) y `fase` son lo que deja a la app pintar una barra en vez
+    de un texto. El porcentaje es del trabajo ENTERO, no de la fase: una barra
+    que vuelve a cero tres veces no informa, desconcierta.
 
     Si corre dentro de un runner, deja anotado además el id de la corrida
     (`GITHUB_RUN_ID`, que Actions inyecta solo). Es lo que permite cancelarla:
     la Edge Function lo lee de aquí en vez de aceptarlo del cliente, así nadie
     puede cancelar la corrida de otra empresa mandando un id cualquiera."""
     _verificar_cliente()
-    fila = {
-        "empresa_id": empresa_actual(),
-        "modulo": modulo,
-        "estado": estado,
-        "detalle": detalle,
-        "actualizado": datetime.now(timezone.utc).isoformat(),
-    }
-    run_id = os.environ.get("GITHUB_RUN_ID", "").strip()
-    if run_id.isdigit():
-        fila["run_id"] = int(run_id)
+    fila = _fila_estado(empresa_actual(), modulo, estado, detalle, progreso, fase)
     with _lock_nube:
         try:
             # El estado es por empresa: dos que descarguen a la vez no deben
@@ -536,6 +552,33 @@ def escribir_estado_descarga(modulo: str, estado: str, detalle: str = ""):
             ).execute())
         except Exception as e:
             raise ErrorNube(f"No se pudo escribir el estado de descarga: {e}") from e
+
+
+def escribir_estado_varias(modulo: str, empresas, estado: str, detalle: str = "",
+                           progreso=None, fase: str = None):
+    """El mismo estado para varias empresas, en UNA petición.
+
+    Existe por la descarga del barrido: es una copia compartida que sirve a
+    todas a la vez, así que su avance le interesa a todas. Escribirlo empresa
+    por empresa serían N peticiones cada cuatro segundos durante hora y media.
+
+    `empresas` es un iterable de ids. Devuelve cuántas filas se escribieron.
+    Nunca lanza: informar del avance no puede tumbar el barrido.
+    """
+    ids = [str(e) for e in (empresas or []) if e]
+    if not ids or supabase is None:
+        return 0
+
+    filas = [_fila_estado(i, modulo, estado, detalle, progreso, fase) for i in ids]
+    with _lock_nube:
+        try:
+            _exec(lambda: supabase.table("descarga_estado").upsert(
+                filas, on_conflict="empresa_id,modulo"
+            ).execute())
+            return len(filas)
+        except Exception as e:
+            print(f"[estado] No se pudo escribir el avance: {e}", flush=True)
+            return 0
 
 
 def guardar_rango_descarga(modulo: str, desde: str, hasta: str):
