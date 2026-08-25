@@ -6,15 +6,22 @@ Es el ÚNICO camino por el que entran datos de Compra Ágil: la app ya no descar
 nada, sólo lee de la nube. Corre en cuatro RANURAS al día, todas programadas:
 
   · 01:00 (madrugada)  → modo `completo`, ranura `noche`: recorre los últimos
-                         DIAS_VENTANA días. Es el único que vuelve sobre los
-                         días viejos, así que es el que detecta los pasos a 2do
-                         llamado y los cierres.
+                         DIAS_VENTANA días y filtra para TODAS las empresas. Es
+                         el único que vuelve sobre los días viejos, así que es el
+                         que detecta los pasos a 2do llamado y los cierres. NO
+                         hace seguimiento (MINUTOS_SEGUIMIENTO['completo'] = 0):
+                         acaba de releer los 30 días, así que el estado que deja
+                         es de hace un momento.
   · 10:00 / 12:00 / 15:00 → modo `dia`, ranuras `manana` / `mediodia` / `tarde`:
-                         listan SÓLO lo publicado hoy. Además sueltan de la
-                         tabla lo que ya tiene el 2do cierre vencido, que se
-                         sabe por la fecha guardada sin preguntarle al portal.
+                         listan SÓLO lo publicado hoy, filtran y ADEMÁS revisan
+                         en el portal el estado de las cotizaciones ya seguidas.
+                         Sueltan también lo que tiene el 2do cierre vencido, que
+                         se sabe por la fecha guardada sin preguntar nada.
 
-DESCARGAR y FILTRAR son cosas distintas, y el plan sólo manda sobre la segunda.
+EL NOCTURNO ES DE TODOS. No depende del plan: sin él ninguna empresa tendría al
+día su conjunto filtrado. Lo que `barridos_dia` reparte son los DIURNOS, que es
+donde está la diferencia real entre un plan y otro: cuántas veces al día se
+vuelve a mirar lo publicado y se confirma el estado de lo que se sigue.
 
 Los datos de Compra Ágil son públicos e idénticos para todas las empresas, así
 que se guarda UNA sola copia compartida (`empresa_id` NULL) que todas leen: esa
@@ -67,30 +74,38 @@ LIMITE_MINUTOS = {"completo": 300, "dia": 100}
 # más el arranque (checkout + pip ≈ 3 min), o GitHub corta igual.
 MINUTOS_SEGUIMIENTO = {"completo": 0, "dia": 55}
 
-# Ranuras del día y a quién alcanza cada una.
+# EL NOCTURNO NO SE REPARTE. Es de todos, esté en el plan que esté: recorre los
+# 30 días de la ventana y es el único que vuelve sobre los días viejos, así que
+# sin él ninguna empresa tendría al día su conjunto filtrado. `barridos_dia`
+# cuenta los DIURNOS, que es lo que de verdad separa a un plan de otro.
+RANURA_SIEMPRE = "noche"
+
+# Los diurnos, y a quién alcanza cada combinación.
 #
-# El plan dice CUÁNTAS veces al día se refiltra a una empresa (`barridos_dia`);
-# esta tabla dice CUÁLES, que es lo que el motor necesita saber.
+# El plan dice CUÁNTOS diurnos al día tiene una empresa; esta tabla dice CUÁLES,
+# que es lo que el motor necesita saber.
 #
-# El plan de un solo barrido va al MEDIODÍA y no a las 10:00: un único refresco
-# al filo de la jornada recoge lo publicado por la mañana y deja la tarde entera
-# para reaccionar. A las 10:00 se habría perdido casi todo el día, y a las 15:00
-# llegaría tarde para preparar una oferta.
+#   3  las tres pasadas: mañana, mediodía y tarde
+#   2  las dos de siempre, que es como funcionaba antes de los planes
+#   1  sólo el mediodía: un único refresco al filo de la jornada recoge lo
+#      publicado por la mañana y deja la tarde entera para reaccionar. A las
+#      10:00 se habría perdido casi todo el día; a las 15:00 llegaría tarde
+#      para preparar una oferta.
 RANURAS_POR_PLAN = {
     1: ("mediodia",),
-    2: ("noche", "mediodia"),
-    3: ("noche", "manana", "tarde"),
+    2: ("manana", "tarde"),
+    3: ("manana", "mediodia", "tarde"),
 }
 
 RANURAS_VALIDAS = ("noche", "manana", "mediodia", "tarde", "todas")
 
 # La única ranura que puede saltarse entera cuando no le toca a nadie.
 #
-# Las otras tres no: aunque no hubiera a quién filtrar, su DESCARGA alimenta la
-# copia compartida que leen todas las empresas. La del mediodía es la excepción
-# porque las de las 10:00 y las 15:00 ya cubren el mismo día, así que mientras no
-# haya ningún cliente de un solo barrido esa corrida no aporta nada y sí gasta
-# minutos de Actions.
+# Las otras no: aunque no hubiera a quién filtrar, su DESCARGA alimenta la copia
+# compartida que leen todas las empresas. La del mediodía es la excepción porque
+# las de las 10:00 y las 15:00 ya cubren el mismo día, así que mientras no haya
+# ningún cliente que la tenga, esa corrida no aporta nada y sí gasta minutos de
+# Actions.
 RANURAS_OMITIBLES = ("mediodia",)
 
 _ultimo_estado = {"t": 0.0}  # throttle de escrituras de estado a la nube
@@ -136,7 +151,7 @@ def _barridos_del_plan(empresa):
     limites = empresa.get("limites")
     if not isinstance(limites, dict):
         return None
-    valor = limites.get("barridos_dia")
+    valor = limites.get("barridos_dia")  # cuenta DIURNOS; el nocturno va aparte
     if valor is None:
         return None
     try:
@@ -147,14 +162,14 @@ def _barridos_del_plan(empresa):
 
 def _le_toca(empresa, ranura):
     """¿Se filtra a esta empresa en esta ranura?"""
-    if ranura == "todas":
-        return True
+    if ranura in ("todas", RANURA_SIEMPRE):
+        return True          # el nocturno no depende del plan
 
     cuantos = _barridos_del_plan(empresa)
     if cuantos is None:
-        return True          # sin tope: todas las ranuras
+        return True          # sin tope: todos los diurnos
     if cuantos <= 0:
-        return False         # un plan sin barridos; hoy no existe ninguno así
+        return False         # sin diurnos; hoy no hay ningún plan así
     if cuantos >= 3:
         return ranura in RANURAS_POR_PLAN[3]
     return ranura in RANURAS_POR_PLAN[cuantos]

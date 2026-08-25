@@ -13,6 +13,12 @@ Corre 1×/noche en GitHub Actions con la service_role. Para cada empresa con la 
 
 El INGRESO (llenar `foro_ofertadas`) queda pendiente: mientras la lista esté vacía,
 este runner no hace nada. La empresa se fija por iteración con EMPRESA_ID/EMPRESA_NOMBRE.
+
+SÓLO PARA QUIEN LA TIENE CONTRATADA. `foros` es una función del plan —el nivel
+Terreno no la lleva— y esto es lo que cuesta de verdad: una ronda de consultas
+al portal por cada licitación ofertada de cada empresa. Filtrar aquí es lo único
+que hace que ese `false` del plan signifique algo, porque el gasto ocurre en el
+servidor aunque el cliente nunca abra la pantalla.
 """
 import os
 import sys
@@ -29,9 +35,26 @@ _UN_ANIO = timedelta(days=365)
 
 
 def _empresas_objetivo():
+    """[(empresa_id, nombre)] de las empresas con la vigilancia de foros incluida."""
     resp = auth.supabase.schema("core").rpc(
         "empresas_de_app", {"p_codigo_app": auth.CODIGO_APP}).execute()
-    return [(str(e["id"]), e.get("nombre", "")) for e in (resp.data or []) if e.get("id")]
+    return [(str(e["id"]), e.get("nombre", ""))
+            for e in (resp.data or [])
+            if e.get("id") and _tiene_foros(e)]
+
+
+def _tiene_foros(empresa) -> bool:
+    """¿El plan de esta empresa incluye la vigilancia de foros?
+
+    Ante la duda, sí. Si `limites` no viene —una base sin
+    28_barridos_por_plan.sql, que es la que empezó a mandarlos— se revisa igual:
+    dejar a un cliente sin su vigilancia por un despliegue a medias es peor que
+    revisar de más una noche.
+    """
+    limites = empresa.get("limites")
+    if not isinstance(limites, dict) or "foros" not in limites:
+        return True
+    return bool(limites["foros"])
 
 
 def _ofertadas(empresa_id):
@@ -132,7 +155,8 @@ def main():
         return 1
 
     if not empresas:
-        print(f"No hay empresas activas con la app '{auth.CODIGO_APP}'.", flush=True)
+        print(f"Ninguna empresa activa con la app '{auth.CODIGO_APP}' tiene la "
+              "vigilancia de foros en su plan.", flush=True)
         return 0
 
     print(f"Revisión nocturna de foros inversos para {len(empresas)} empresa(s).", flush=True)
