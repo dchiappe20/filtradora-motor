@@ -6,7 +6,20 @@ name: Revisión nocturna Foros Inversos
 on:
   schedule:
     # 09:00 UTC ≈ 05:00 Chile (después del nocturno de Compra Ágil).
-    - cron: '0 9 * * *'
+    # LOS MINUTOS NO SON REDONDOS A PROPÓSITO (2026-08-27).
+    #
+    # La noche del 26 al 27 no disparó NINGUNA corrida programada del repo —ni
+    # ésta ni las de los otros workflows— mientras que lanzar a mano seguía
+    # funcionando. Ese mismo día se veía el síntoma de la cola: los diurnos
+    # salieron 8, 33 y 43 minutos tarde y faltaron dos corridas.
+    #
+    # Los cron de Actions son «best effort» y la hora en punto es cuando más
+    # cola hay, que es justo cuando GitHub las atrasa o las tira. Correrse unos
+    # minutos es lo que recomiendan ellos y no cuesta nada.
+    #
+    # Si aun así siguen sin dispararse, el problema NO es la cola: sería el tope
+    # de uso medido de la cuenta, y se arregla en la facturación, no aquí.
+    - cron: '23 9 * * *'
   workflow_dispatch: {}
 
 # El token automatico del job no necesita escribir nada en el repositorio: solo

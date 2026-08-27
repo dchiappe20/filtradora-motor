@@ -11,7 +11,20 @@ on:
     # portal responde mucho mejor y la corrida termina bastante antes de que la
     # gente empiece a trabajar.
     # El cron de GitHub Actions es "best effort": puede atrasarse algunos minutos.
-    - cron: '0 5 * * *'
+    # LOS MINUTOS NO SON REDONDOS A PROPÓSITO (2026-08-27).
+    #
+    # La noche del 26 al 27 no disparó NINGUNA corrida programada del repo —ni
+    # ésta ni las de los otros workflows— mientras que lanzar a mano seguía
+    # funcionando. Ese mismo día se veía el síntoma de la cola: los diurnos
+    # salieron 8, 33 y 43 minutos tarde y faltaron dos corridas.
+    #
+    # Los cron de Actions son «best effort» y la hora en punto es cuando más
+    # cola hay, que es justo cuando GitHub las atrasa o las tira. Correrse unos
+    # minutos es lo que recomiendan ellos y no cuesta nada.
+    #
+    # Si aun así siguen sin dispararse, el problema NO es la cola: sería el tope
+    # de uso medido de la cuenta, y se arregla en la facturación, no aquí.
+    - cron: '7 5 * * *'
   # Permite lanzarlo a mano desde la pestaña "Actions" -> "Run workflow".
   workflow_dispatch: {}
 

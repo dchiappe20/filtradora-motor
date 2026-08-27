@@ -39,7 +39,23 @@ on:
     #
     # El barrido de la tarde se adelantó de las 16:00 a las 15:00 para que sus
     # resultados estén disponibles antes de que termine la jornada.
-    - cron: '0 13,14,15,16,18,19 * * *'
+    # LOS MINUTOS NO SON REDONDOS A PROPÓSITO (2026-08-27).
+    #
+    # La noche del 26 al 27 no disparó NINGUNA corrida programada del repo —ni
+    # ésta ni las de los otros workflows— mientras que lanzar a mano seguía
+    # funcionando. Ese mismo día se veía el síntoma de la cola: los diurnos
+    # salieron 8, 33 y 43 minutos tarde y faltaron dos corridas.
+    #
+    # Los cron de Actions son «best effort» y la hora en punto es cuando más
+    # cola hay, que es justo cuando GitHub las atrasa o las tira. Correrse unos
+    # minutos es lo que recomiendan ellos y no cuesta nada.
+    #
+    # Si aun así siguen sin dispararse, el problema NO es la cola: sería el tope
+    # de uso medido de la cuenta, y se arregla en la facturación, no aquí.
+    #
+    # El minuto no afecta al guardia de abajo, que mira la HORA en Chile
+    # (`date +%H`): las ranuras siguen saliendo a las 10, 12 y 15.
+    - cron: '17 13,14,15,16,18,19 * * *'
   # A mano desde "Actions" -> "Run workflow": corre siempre, sea la hora que sea.
   workflow_dispatch: {}
 
