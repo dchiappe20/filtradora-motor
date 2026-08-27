@@ -120,10 +120,16 @@ PESOS = {
     "dia":      {"descarga": (0, 60), "filtrado": (60, 80),  "seguimiento": (80, 100)},
 }
 
-# A quién se le cuenta el avance y en qué fase va. Lo fija `main()` antes de
-# empezar; `_log` lo lee sin tener que recibirlo por parámetro, porque quien lo
-# llama es `compra_agil_api`, que no sabe nada de empresas ni de fases.
-_avance = {"modo": "dia", "fase": "descarga", "empresas": []}
+# A quién se le cuenta el avance, en qué fase va y qué es lo último que se le
+# dijo al cliente. Lo fija `main()` antes de empezar; `_log` lo lee sin tener
+# que recibirlo por parámetro, porque quien lo llama es `compra_agil_api`, que
+# no sabe nada de empresas ni de fases.
+#
+# `publico` se guarda porque la mayoría de los mensajes del motor no son para el
+# cliente: cuando llega uno de ésos hay que refrescar la fila igual (si no, a
+# los 180 s la app da la descarga por colgada) pero SIN cambiar el texto.
+_avance = {"modo": "dia", "fase": "descarga", "empresas": [],
+           "publico": "Barrido en curso..."}
 
 _ultimo_estado = {"t": 0.0}  # throttle de escrituras de estado a la nube
 
@@ -152,6 +158,8 @@ def _publicar(estado, detalle, progreso=None, forzar=False):
     4 segundos son unas 20 escrituras por hora de barrido, todas en una sola
     petición.
     """
+    if estado == "corriendo" and detalle:
+        _avance["publico"] = detalle
     ahora = time.time()
     if not forzar and ahora - _ultimo_estado["t"] < 4:
         return
@@ -164,18 +172,25 @@ def _publicar(estado, detalle, progreso=None, forzar=False):
         pass  # informar del avance no puede tumbar el barrido
 
 
-def _log(mensaje, progreso=None):
-    """Callback: log a stdout + estado en `descarga_estado` (throttled) de la
-    empresa en curso (según EMPRESA_ID), para que su app lo vea si está mirando."""
+def _log(mensaje, progreso=None, publico=None):
+    """Callback del motor: el detalle va al log de la corrida y sólo lo que le
+    importa al cliente sube a `descarga_estado`.
+
+    Iban los dos por el mismo sitio, y en la barra de la app aparecían cosas
+    como «Reintentando 14 ficha(s) que el portal no sirvió» o el día del listado
+    que tocaba: contabilidad de la máquina para quien sólo quiere saber si sus
+    cotizaciones están al día. Ahora el motor dice aparte qué se puede enseñar
+    (ver `compra_agil_api._avisar`) y sin eso se mantiene el texto anterior.
+
+    El porcentaje sí es de los dos: ya venía calculado desde `compra_agil_api` y
+    hasta hace poco se imprimía y se tiraba.
+    """
     marca = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if progreso is not None:
         print(f"[{marca}] {mensaje} ({progreso:.0f}%)", flush=True)
     else:
         print(f"[{marca}] {mensaje}", flush=True)
-    # El porcentaje ya venía calculado desde `compra_agil_api` y hasta ahora se
-    # imprimía y se tiraba: a la nube subía sólo el texto, así que la app podía
-    # decir «barrido en curso» y poco más.
-    _publicar("corriendo", mensaje, _progreso_global(progreso))
+    _publicar("corriendo", publico or _avance["publico"], _progreso_global(progreso))
 
 
 def _empresas_objetivo():
@@ -271,6 +286,11 @@ def _filtrar_y_seguir(empresas, modo):
         print("  Ninguna empresa toca en esta ranura: no hay nada que filtrar.", flush=True)
         return ""
 
+    # El anuncio va ANTES de leer la copia compartida: son ~15 MB y ese rato la
+    # barra se quedaría con el último mensaje de la descarga.
+    _fijar_fase("filtrado")
+    _publicar("corriendo", "Filtrando cotizaciones...", _progreso_global(0), forzar=True)
+
     try:
         df_crudo = datos_nube.leer_tabla(compra_agil_api.TABLA_NUBE)
     except Exception as e:
@@ -297,12 +317,14 @@ def _filtrar_y_seguir(empresas, modo):
     # Va primero y sin reloj porque es lo esencial y lo barato: sin filtrar, la
     # app no ve las cotizaciones nuevas. Son ~1-2 minutos por empresa.
     print(f"Filtrando para {len(empresas)} empresa(s)...", flush=True)
-    _fijar_fase("filtrado")
     for indice, (empresa_id, nombre) in enumerate(empresas):
         # El avance de esta fase es cuántas empresas van, no cuánto lleva cada
         # una: `filtrar_para_empresa` es una sola pasada y no informa por dentro.
-        _publicar("corriendo",
-                  f"Filtrando para {nombre} ({indice + 1} de {len(empresas)})...",
+        #
+        # El texto NO nombra a la empresa que toca. La fila de estado se escribe
+        # igual para todas —la descarga es una copia compartida— así que poner
+        # ahí el nombre le enseñaba a cada cliente los de los demás.
+        _publicar("corriendo", "Filtrando cotizaciones...",
                   _progreso_global(100 * indice / max(len(empresas), 1)),
                   forzar=True)
         try:
@@ -340,8 +362,9 @@ def _filtrar_y_seguir(empresas, modo):
 
     _fijar_fase("seguimiento")
     for i, (empresa_id, nombre) in enumerate(empresas):
-        _publicar("corriendo",
-                  f"Revisando el estado de {nombre} ({i + 1} de {len(empresas)})...",
+        # Mismo motivo que en el filtrado: el nombre de la empresa que toca no
+        # puede acabar en la pantalla de las otras.
+        _publicar("corriendo", "Confirmando el estado de tus cotizaciones...",
                   _progreso_global(100 * i / max(len(empresas), 1)),
                   forzar=True)
         restantes = len(empresas) - i

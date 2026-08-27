@@ -11,7 +11,7 @@ para que el resto del código siga trabajando con los encabezados de siempre.
 import os
 import re
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
@@ -41,7 +41,7 @@ MAPEO_COMPRA_AGIL = {
 # Compra Ágil es pública e idéntica para todas las empresas: se guarda UNA sola
 # copia, con empresa_id NULL, y todas la leen. Antes se duplicaba por empresa,
 # que en la ventana de 10 días con todas las cotizaciones son ~62 MB por copia.
-TABLAS_COMPARTIDAS = {"compra_agil"}
+TABLAS_COMPARTIDAS = {"compra_agil", "clientes_seguimiento"}
 
 
 def es_compartida(nombre_tabla: str) -> bool:
@@ -51,6 +51,9 @@ MAPEO_LICITACIONES = {
     "Numero Adquisición":   "numero_adquisicion",
     "Nombre Adquisición":   "nombre_adquisicion",
     "Organismo":            "organismo",
+    # ⚠ Necesita `sql_licitaciones_rut.sql` corrido en Supabase: sin esa columna
+    # el insert de la descarga falla entero.
+    "RUT Organismo":        "rut_organismo",
     "Fecha Publicación":    "fecha_publicacion",
     "Fecha Cierre":         "fecha_cierre",
     "Cantidad":             "cantidad",
@@ -74,9 +77,36 @@ MAPEO_SEGUIMIENTO = {
     "Estado Seguimiento":   "estado_seguimiento",
 }
 
+# Lo que publican los compradores que cada vendedor sigue (módulo «Clientes»).
+# Lleva licitaciones y compras ágiles MEZCLADAS, distinguidas por `Tipo`: el
+# módulo las enseña en una sola tabla y deja filtrar por una o por la otra.
+TABLA_CLIENTES = "clientes_seguimiento"
+
+MAPEO_CLIENTES = {
+    "RUT Organismo":            "rut_organismo",
+    "Organismo":                "organismo",
+    "Tipo":                     "tipo",
+    "Numero Adquisición":       "numero_adquisicion",
+    "Nombre Adquisición":       "nombre_adquisicion",
+    "Fecha Publicación":        "fecha_publicacion",
+    "Fecha Cierre":             "fecha_cierre",
+    "Fecha Cierre 1er Llamado": "fecha_cierre_1er_llamado",
+    "Fecha Cierre 2do Llamado": "fecha_cierre_2do_llamado",
+    "Llamado":                  "llamado",
+    "Estado":                   "estado",
+    "Cantidad":                 "cantidad",
+    "Descripción Producto":     "descripcion_producto",
+    "Nombre Producto":          "nombre_producto",
+}
+
+# De quién es cada licitación activa. No la lee la app: es el andamiaje que
+# evita volver a pedirle al portal las 4.579 fichas cada noche.
+TABLA_INDICE_LICITACIONES = "licitaciones_indice"
+
 _MAPEOS = {
     "compra_agil": MAPEO_COMPRA_AGIL,
     "licitaciones": MAPEO_LICITACIONES,
+    TABLA_CLIENTES: MAPEO_CLIENTES,
     TABLA_SEGUIMIENTO: MAPEO_SEGUIMIENTO,
 }
 
@@ -507,6 +537,163 @@ def cerrar_seguimiento(codigos) -> int:
     return len(codigos)
 
 
+def seguimiento_de_clientes(ruts) -> pd.DataFrame:
+    """Lo vigente de esos compradores. -> DataFrame con encabezados de Excel.
+
+    Se pide POR RUT y no la tabla entera: ahí dentro están los clientes de todos
+    los vendedores de todas las empresas, y bajarlos para enseñar los de uno
+    sería pagar el egress de los demás.
+    """
+    columnas = list(MAPEO_CLIENTES.keys())
+    ruts = [str(r).strip() for r in dict.fromkeys(ruts or []) if str(r).strip()]
+    if not ruts:
+        return pd.DataFrame(columns=columnas)
+
+    _verificar_cliente()
+    inverso = {v: k for k, v in MAPEO_CLIENTES.items()}
+    seleccion = ",".join(MAPEO_CLIENTES.values())
+    filas = []
+    try:
+        # `in_` con listas acotadas: una petición por cada 100 clientes.
+        for i in range(0, len(ruts), 100):
+            lote = ruts[i:i + 100]
+            offset = 0
+            while True:
+                def _consulta(lote=lote, offset=offset):
+                    return (supabase.table(TABLA_CLIENTES).select(seleccion)
+                            .is_("empresa_id", "null")
+                            .in_("rut_organismo", lote)
+                            .order("id")
+                            .range(offset, offset + _TAM_PAGINA_SELECT - 1).execute())
+
+                datos = _exec(_consulta).data or []
+                filas.extend(datos)
+                if len(datos) < _TAM_PAGINA_SELECT:
+                    break
+                offset += _TAM_PAGINA_SELECT
+    except Exception as e:
+        raise ErrorNube(f"No se pudo leer el seguimiento de clientes: {e}") from e
+
+    if not filas:
+        return pd.DataFrame(columns=columnas)
+    df = pd.DataFrame(filas).rename(columns=inverso)
+    for col in columnas:
+        if col not in df.columns:
+            df[col] = ""
+    return df[columnas].fillna("")
+
+
+def guardar_cliente(rut: str, df: pd.DataFrame) -> int:
+    """Reemplaza lo guardado de ese comprador. -> filas escritas.
+
+    Borrar y volver a poner lo de UN comprador es correcto aquí (al revés que en
+    `compra_agil`, donde se sincroniza fila a fila para no mover la marca
+    `actualizado` de todo): lo de un cliente son decenas de filas, no decenas de
+    miles, y lo que se guarda es «lo que tiene vivo AHORA», así que lo que ya no
+    está tiene que desaparecer.
+    """
+    rut = str(rut or "").strip()
+    if not rut:
+        return 0
+    sincronizar_tabla(TABLA_CLIENTES, df, [rut], columna_codigo="rut_organismo")
+    return 0 if df is None or df.empty else len(df)
+
+
+def guardar_cliente_tipo(rut: str, tipo: str, df: pd.DataFrame) -> int:
+    """Reemplaza lo guardado de ese comprador PARA UN TIPO. -> filas escritas.
+
+    Existe porque las dos mitades del barrido son independientes y cuestan cosas
+    distintas: la de Compra Ágil se completa siempre y la de licitaciones puede
+    cortarse por tiempo en la primera corrida. Guardando por tipo, que una se
+    quede a medias no borra de la pantalla lo que la otra sí trajo.
+    """
+    rut = str(rut or "").strip()
+    if not rut or not tipo:
+        return 0
+    _verificar_cliente()
+    filas = _a_filas(TABLA_CLIENTES, df, None)
+    with _lock_nube:
+        try:
+            _exec(lambda: supabase.table(TABLA_CLIENTES).delete()
+                  .is_("empresa_id", "null")
+                  .eq("rut_organismo", rut).eq("tipo", tipo).execute())
+            for i in range(0, len(filas), _TAM_LOTE_INSERT):
+                lote = filas[i:i + _TAM_LOTE_INSERT]
+                _exec(lambda lote=lote: supabase.table(TABLA_CLIENTES)
+                      .insert(lote).execute())
+        except ErrorNube:
+            raise
+        except Exception as e:
+            raise ErrorNube(f"No se pudo guardar el cliente {rut}: {e}") from e
+    return len(filas)
+
+
+def leer_indice_licitaciones() -> dict:
+    """{numero_adquisicion: rut_organismo} de las licitaciones ya identificadas.
+
+    Es lo que hace que el barrido no vuelva a pedir 4.579 fichas cada noche.
+    Sólo dos columnas: pesa unos cientos de KB y se lee entera.
+    """
+    if supabase is None:
+        return {}
+    indice, offset = {}, 0
+    try:
+        while True:
+            def _consulta():
+                return (supabase.table(TABLA_INDICE_LICITACIONES)
+                        .select("numero_adquisicion,rut_organismo")
+                        .order("numero_adquisicion")
+                        .range(offset, offset + _TAM_PAGINA_SELECT - 1).execute())
+
+            datos = _exec(_consulta).data or []
+            for fila in datos:
+                codigo = str(fila.get("numero_adquisicion") or "")
+                if codigo:
+                    indice[codigo] = str(fila.get("rut_organismo") or "")
+            if len(datos) < _TAM_PAGINA_SELECT:
+                break
+            offset += _TAM_PAGINA_SELECT
+    except Exception as e:
+        print(f"[clientes] No se pudo leer el índice de licitaciones: {e}", flush=True)
+    return indice
+
+
+def guardar_indice_licitaciones(identidades) -> int:
+    """Anota de quién son esas licitaciones. -> cuántas se escribieron."""
+    filas = [dict(i, actualizado=datetime.now(timezone.utc).isoformat())
+             for i in (identidades or []) if i.get("numero_adquisicion")]
+    if not filas or supabase is None:
+        return 0
+    with _lock_nube:
+        try:
+            for i in range(0, len(filas), _TAM_LOTE_INSERT):
+                lote = filas[i:i + _TAM_LOTE_INSERT]
+                _exec(lambda lote=lote: supabase.table(TABLA_INDICE_LICITACIONES)
+                      .upsert(lote, on_conflict="numero_adquisicion").execute())
+        except Exception as e:
+            print(f"[clientes] No se pudo guardar el índice: {e}", flush=True)
+            return 0
+    return len(filas)
+
+
+def podar_indice_licitaciones(dias: int = 30) -> None:
+    """Suelta del índice lo que cerró hace tiempo.
+
+    Sin esto el índice crece ~1.000 filas al día para siempre. Se poda por fecha
+    de cierre y no por cuándo se anotó: una licitación cerrada ya no va a volver
+    a aparecer entre las activas, así que su fila no sirve para nada.
+    """
+    if supabase is None:
+        return
+    corte = (datetime.now(timezone.utc) - timedelta(days=dias)).strftime("%Y-%m-%d")
+    with _lock_nube:
+        try:
+            _exec(lambda: supabase.table(TABLA_INDICE_LICITACIONES).delete()
+                  .lt("fecha_cierre", corte).execute())
+        except Exception as e:
+            print(f"[clientes] No se pudo podar el índice: {e}", flush=True)
+
+
 def _fila_estado(empresa_id, modulo, estado, detalle, progreso, fase):
     """La fila de `descarga_estado` tal como se guarda. Un solo sitio."""
     fila = {
@@ -853,14 +1040,26 @@ def registrar_revision_manual():
 
 
 def hay_datos(nombre_tabla: str) -> bool:
-    """True si la tabla tiene al menos una fila DE ESTA EMPRESA. False también si
-    no hay conexión (para que la UI simplemente deje el botón de filtrar
-    deshabilitado)."""
+    """True si la tabla tiene al menos una fila que esta empresa pueda ver.
+
+    False también si no hay conexión, para que la UI se quede quieta en vez de
+    afirmar algo que no sabe.
+
+    Va por `_filtro_empresa`, igual que `contar_filas`. Antes filtraba a pelo
+    con `.eq("empresa_id", empresa_actual())` y eso dejó de valer cuando Compra
+    Ágil pasó a copia compartida (`empresa_id` NULL): ninguna fila casa con el
+    id de una empresa, así que siempre respondía False habiendo decenas de
+    miles de cotizaciones. El daño era un diagnóstico al revés — la pantalla
+    decía «el barrido todavía no ha dejado datos en la nube», que se lee como
+    «espera», cuando lo que hacía falta era «Refiltrar ahora».
+    """
     if supabase is None:
         return False
     try:
-        resp = _exec(lambda: supabase.table(nombre_tabla).select("id")
-                     .eq("empresa_id", empresa_actual()).limit(1).execute())
+        empresa_id = empresa_actual() if not es_compartida(nombre_tabla) else None
+        resp = _exec(lambda: _filtro_empresa(
+            supabase.table(nombre_tabla).select("id"),
+            nombre_tabla, empresa_id).limit(1).execute())
         return bool(resp.data)
     except Exception:
         return False

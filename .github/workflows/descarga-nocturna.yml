@@ -62,3 +62,22 @@ jobs:
           # durante toda la madrugada chilena y la ventana quedaría corrida.
           TZ: America/Santiago
         run: python barrido_compra_agil.py completo noche
+
+      - name: Barrido de clientes seguidos
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          TZ: America/Santiago
+          # Las licitaciones se piden a la API oficial, que limita POR TICKET.
+          # Lo que se baja aquí es público e igual para todas las empresas, así
+          # que basta uno: el runner usa el común si existe y, si no, el de la
+          # primera empresa que tenga el suyo.
+          MP_TICKET: ${{ secrets.MP_TICKET }}
+          MP_TICKET_AMILAB: ${{ secrets.MP_TICKET_AMILAB }}
+          MP_TICKET_UTEM: ${{ secrets.MP_TICKET_UTEM }}
+        # `continue-on-error`: esto va DESPUÉS del barrido de Compra Ágil, que
+        # es el que da de comer a todas las pantallas. Si el de clientes falla,
+        # la corrida no puede quedar en rojo y hacer dudar de lo demás.
+        continue-on-error: true
+        run: python barrido_clientes.py 60
+
