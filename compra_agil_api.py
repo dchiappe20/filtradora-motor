@@ -483,6 +483,10 @@ def gestionar_descarga_ultimas(callback_estado=None, cancel_event=None,
     ANTES de pedir la ficha si algo cambió: sólo se bajan las fichas nuevas y las
     de cotizaciones que pasaron de un llamado a otro. Lo ya guardado se conserva.
 
+    `callback_estado(mensaje, progreso, publico)`: `mensaje` es el detalle
+    técnico para el log y `publico` lo poco que tiene sentido enseñarle al
+    cliente (ver `_avisar`). Un callback de dos parámetros sigue funcionando.
+
     El caché guarda el llamado TAL CUAL lo dice el portal. Que un primer cierre
     ya haya pasado no se anota aquí: eso lo decide la pantalla al pintar, con la
     hora de ese momento (ver `compra_agil._llamado_visible`).
@@ -500,8 +504,21 @@ def gestionar_descarga_ultimas(callback_estado=None, cancel_event=None,
     # entera reintentando y no dejar tiempo para bajar nada de lo que sí listó.
     corte = (time.monotonic() + limite_minutos * 60) if limite_minutos else None
 
-    if callback_estado:
-        callback_estado("Leyendo datos existentes en la nube...", 0)
+    def _avisar(mensaje, progreso=None, publico=None):
+        """Deja constancia de dónde va el barrido, en dos canales distintos.
+
+        `mensaje` es para el log de la corrida, con todo el detalle: días,
+        reintentos, páginas que se cayeron. `publico` es lo que ve el cliente en
+        la barra de la app, y va aparte a propósito — «Reintentando 14 ficha(s)
+        que el portal no sirvió» es ruido de la máquina para quien sólo quiere
+        saber si sus cotizaciones están al día. Sin `publico`, la app sigue
+        mostrando lo último que se le dijo.
+        """
+        if callback_estado:
+            callback_estado(mensaje, progreso, publico)
+
+    _avisar("Leyendo datos existentes en la nube...", 0,
+            "Buscando cotizaciones nuevas...")
 
     try:
         df_cache = datos_nube.leer_tabla(TABLA_NUBE)
@@ -537,10 +554,16 @@ def gestionar_descarga_ultimas(callback_estado=None, cancel_event=None,
     paginas_perdidas = 0       # páginas que no contestaron ni tras el rescate
     listado_cortado = False    # se acabó el tiempo antes de mirar todos los días
 
-    if callback_estado:
-        callback_estado(
-            f"Revisando qué hay de nuevo ({len(dias)} día(s), "
-            f"desde el {dias[0].strftime('%d-%m')})...", 0)
+    def _publico_listado():
+        """Lo que ve el cliente mientras se recorre el listado: cuántas
+        cotizaciones se le van a bajar. El día que se está mirando y las
+        páginas que se cayeron son cosa del log."""
+        pendientes = len(codigos_descargar)
+        return (f"Descargando {pendientes} cotizaciones..." if pendientes
+                else "Buscando cotizaciones nuevas...")
+
+    _avisar(f"Revisando qué hay de nuevo ({len(dias)} día(s), "
+            f"desde el {dias[0].strftime('%d-%m')})...", 0, _publico_listado())
 
     for idx_dia, dia in enumerate(dias, start=1):
         if cancel_event is not None and cancel_event.is_set():
@@ -552,18 +575,16 @@ def gestionar_descarga_ultimas(callback_estado=None, cancel_event=None,
             listado_cortado = True
             break
         dia_str = dia.strftime("%Y-%m-%d")
-        if callback_estado:
-            callback_estado(
-                f"Revisando cotizaciones... día {dia_str} "
-                f"({idx_dia}/{len(dias)}) ({len(codigos_descargar)} por descargar)", 0)
+        _avisar(f"Revisando cotizaciones... día {dia_str} "
+                f"({idx_dia}/{len(dias)}) ({len(codigos_descargar)} por descargar)",
+                0, _publico_listado())
 
         def _al_llegar(payload, dia_str=dia_str, idx_dia=idx_dia):
             _procesar_pagina_listado(payload, vistos, llamado_por_codigo,
                                      codigos_descargar, codigos_cerrados)
-            if callback_estado:
-                callback_estado(
-                    f"Revisando cotizaciones... día {dia_str} "
-                    f"({idx_dia}/{len(dias)}) ({len(codigos_descargar)} por descargar)", 0)
+            _avisar(f"Revisando cotizaciones... día {dia_str} "
+                    f"({idx_dia}/{len(dias)}) ({len(codigos_descargar)} por descargar)",
+                    0, _publico_listado())
 
         perdidas, se_pudo = _listar_dia(dia_str, cancel_event, _al_llegar,
                                         callback_estado, corte)
@@ -576,11 +597,10 @@ def gestionar_descarga_ultimas(callback_estado=None, cancel_event=None,
         else:
             dias_ok.append(dia_str)
 
-    if dias_fallidos and callback_estado:
-        callback_estado(
-            f"⚠️ El portal no respondió al listar {len(dias_fallidos)} día(s) "
-            f"({paginas_perdidas} página(s) perdida(s), ~{paginas_perdidas * 50} "
-            f"cotizaciones sin mirar): {', '.join(dias_fallidos)}", None)
+    if dias_fallidos:
+        _avisar(f"⚠️ El portal no respondió al listar {len(dias_fallidos)} día(s) "
+                f"({paginas_perdidas} página(s) perdida(s), ~{paginas_perdidas * 50} "
+                f"cotizaciones sin mirar): {', '.join(dias_fallidos)}", None)
 
     total = len(codigos_descargar)
 
@@ -604,14 +624,14 @@ def gestionar_descarga_ultimas(callback_estado=None, cancel_event=None,
     a_soltar |= _codigos_ausentes(unicos, set(dias_ok[1:]), vistos, codigos_descargar)
 
     if total == 0:
-        if callback_estado:
-            # «Sin novedades» sólo se puede decir si de verdad se pudo mirar. Con
-            # el listado caído no se sabe si hay novedades o no, y darlo por bueno
-            # es lo que hizo que la corrida de las 16:00 del 2026-08-12 acabara en
-            # verde sin haber bajado nada.
-            callback_estado(
-                "No se pudo comprobar si hay novedades: el portal no respondió al listar."
-                if dias_fallidos else "Sin novedades: no hay cotizaciones nuevas.", 100)
+        # «Sin novedades» sólo se puede decir si de verdad se pudo mirar. Con
+        # el listado caído no se sabe si hay novedades o no, y darlo por bueno
+        # es lo que hizo que la corrida de las 16:00 del 2026-08-12 acabara en
+        # verde sin haber bajado nada.
+        _avisar(
+            "No se pudo comprobar si hay novedades: el portal no respondió al listar."
+            if dias_fallidos else "Sin novedades: no hay cotizaciones nuevas.", 100,
+            None if dias_fallidos else "Sin cotizaciones nuevas.")
         if a_soltar:
             datos_nube.sincronizar_tabla(
                 TABLA_NUBE, pd.DataFrame(columns=COLUMNAS_COMPLETAS), a_soltar)
@@ -630,6 +650,7 @@ def gestionar_descarga_ultimas(callback_estado=None, cancel_event=None,
     filas_lote, codigos_lote = [], []
     descargadas = 0            # fichas que de verdad llegaron y se guardan
     procesados = 0             # intentos resueltos (llegaran o no): sólo para el avance
+    tope_avance = 0            # el mismo número, pero sin retrocesos (ver abajo)
     sin_ficha = []             # el portal no las sirvió: se reintentan al final
 
     def _guardar_lote():
@@ -655,7 +676,7 @@ def gestionar_descarga_ultimas(callback_estado=None, cancel_event=None,
         meter ahí uno fallido borraría de la tabla lo que ya había sin poner nada
         en su sitio — una cotización que pasa a 2do llamado y cuya ficha da 504
         desaparecería de la pantalla hasta el barrido siguiente."""
-        nonlocal descargadas, procesados
+        nonlocal descargadas, procesados, tope_avance
         fallidos = []
         agotado = False
         executor = ThreadPoolExecutor(max_workers=hilos)
@@ -675,9 +696,17 @@ def gestionar_descarga_ultimas(callback_estado=None, cancel_event=None,
                 if len(codigos_lote) >= LOTE_GUARDADO:
                     _guardar_lote()
 
-                if callback_estado:
-                    callback_estado(f"{etiqueta} {procesados} de {total}...",
-                                    (procesados / total) * 100)
+                # El cliente ve siempre lo mismo, vaya por la primera pasada o
+                # por el rescate: para él son sus cotizaciones, no dos vueltas.
+                #
+                # Y no retrocede. Al entrar el rescate, `procesados` vuelve
+                # atrás a propósito —las fichas que fallaron se recuentan— y la
+                # barra bajaba de 60% a 54% a la vista del cliente. El número
+                # exacto sigue en el log; a la pantalla va el máximo alcanzado.
+                tope_avance = max(tope_avance, procesados)
+                _avisar(f"{etiqueta} {procesados} de {total}...",
+                        (tope_avance / total) * 100,
+                        f"Revisando cotizaciones {tope_avance} de {total}...")
 
                 # Se corta por tiempo ANTES de que lo mate el runner: así el lote en
                 # curso se guarda y mañana se retoma en vez de perderlo todo.
@@ -701,27 +730,25 @@ def gestionar_descarga_ultimas(callback_estado=None, cancel_event=None,
     # de ~29 s en generar) y ésas no hay forma de traerlas. Como no se guardaron,
     # tampoco quedan en caché: el barrido siguiente volverá a intentarlo.
     if sin_ficha and not incompleto:
-        if callback_estado:
-            callback_estado(
-                f"Reintentando {len(sin_ficha)} ficha(s) que el portal no sirvió...", None)
+        _avisar(f"Reintentando {len(sin_ficha)} ficha(s) que el portal no sirvió...",
+                None)
         procesados -= len(sin_ficha)   # se vuelven a contar en la segunda pasada
         agotado, sin_ficha = _bajar_fichas(
             sin_ficha, MAX_WORKERS_RESCATE, "Reintentando cotizaciones")
         incompleto = agotado or listado_cortado
         _guardar_lote()
 
-    if callback_estado:
-        if incompleto:
-            callback_estado(
-                f"Se acabó el tiempo de esta corrida: {descargadas} de {total} "
+    # Sin texto público: lo que viene a continuación es el filtrado, y es él
+    # quien anuncia en qué anda.
+    if incompleto:
+        _avisar(f"Se acabó el tiempo de esta corrida: {descargadas} de {total} "
                 f"descargadas. El resto sigue en la próxima.", 100)
-        elif sin_ficha:
-            callback_estado(
-                f"Descarga subida a la nube: {descargadas} de {total}. El portal no "
+    elif sin_ficha:
+        _avisar(f"Descarga subida a la nube: {descargadas} de {total}. El portal no "
                 f"sirvió la ficha de {len(sin_ficha)}; se reintentan en el próximo "
                 f"barrido.", 100)
-        else:
-            callback_estado("¡Descarga completada y subida a la nube!", 100)
+    else:
+        _avisar("¡Descarga completada y subida a la nube!", 100)
 
     return {"completo": not incompleto, "descargadas": descargadas,
             "pendientes": total - procesados,

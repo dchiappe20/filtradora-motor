@@ -57,14 +57,15 @@ jobs:
     #   descarga   100 min  (LIMITE_MINUTOS['dia'])
     #   filtrado     ~6 min  (~2 por empresa)
     #   seguimiento  55 min  (MINUTOS_SEGUIMIENTO['dia'])
+    #   clientes     25 min  (el argumento de barrido_clientes.py)
     #   arranque      ~3 min  (checkout + pip)
     #   ------------------
-    #                164 min
+    #                189 min
     #
     # Estaba en 120 y por eso el 2026-08-19 GitHub cortó la corrida en mitad del
     # seguimiento: la descarga sola ya se llevaba 100. Los dos cortes internos
     # del script paran antes que esto; el timeout es sólo la red de seguridad.
-    timeout-minutes: 175
+    timeout-minutes: 200
     # Mismo grupo que el barrido nocturno: dos barridos nunca escriben la tabla
     # a la vez. El que llegue segundo espera.
     concurrency:
@@ -122,3 +123,23 @@ jobs:
           # escribe en cada una. El código acota todo por empresa_id.
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python barrido_compra_agil.py dia ${{ steps.horario.outputs.ranura }}
+
+      - name: Barrido de clientes seguidos
+        if: steps.horario.outputs.toca == 'si'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          TZ: America/Santiago
+          # Las licitaciones se piden a la API oficial, que limita POR TICKET.
+          # Lo que se baja aquí es público e igual para todas las empresas, así
+          # que basta uno: el runner usa el común si existe y, si no, el de la
+          # primera empresa que tenga el suyo.
+          MP_TICKET: ${{ secrets.MP_TICKET }}
+          MP_TICKET_AMILAB: ${{ secrets.MP_TICKET_AMILAB }}
+          MP_TICKET_UTEM: ${{ secrets.MP_TICKET_UTEM }}
+        # `continue-on-error`: esto va DESPUÉS del barrido de Compra Ágil, que
+        # es el que da de comer a todas las pantallas. Si el de clientes falla,
+        # la corrida no puede quedar en rojo y hacer dudar de lo demás.
+        continue-on-error: true
+        run: python barrido_clientes.py 25
+
