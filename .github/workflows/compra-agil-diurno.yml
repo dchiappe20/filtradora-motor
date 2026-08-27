@@ -96,6 +96,21 @@ jobs:
         id: horario
         run: |
           hora=$(date +%H)
+          minuto=$(date +%M)
+          # LA RANURA ES LA DE LA HORA PROGRAMADA, NO LA DEL RELOJ (2026-08-27).
+          #
+          # Los cron de Actions se atrasan: ayer salieron 8, 33 y 43 minutos
+          # tarde. Si el atraso cruza el cambio de hora, este guardia veia otra
+          # hora y descartaba la corrida EN SILENCIO — no corria tarde, no
+          # corria. Y con los cron al minuto :17 el margen es de 43 minutos.
+          #
+          # Los cron salen siempre al minuto 17 (y Chile va a horas enteras de
+          # UTC), asi que arrancar ANTES de ese minuto solo puede significar una
+          # cosa: la corrida se paso a la hora siguiente. Se le devuelve la suya.
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$((10#$minuto))" -lt 17 ]; then
+            hora=$(printf '%02d' $(( (10#$hora + 23) % 24 )))
+            echo "Llego tarde y cruzo de hora: su ranura es la de las $hora."
+          fi
           case "$hora" in
             10) ranura=manana ;;
             12) ranura=mediodia ;;
