@@ -49,7 +49,10 @@ def _log(mensaje):
 
 def _compradores_seguidos():
     """[(rut, seguidores)] de todo el mundo, sin repetir. Vía core."""
-    resp = auth.supabase.schema("core").rpc("compradores_seguidos").execute()
+    # El `{}` no sobra aunque la función no reciba parámetros: el cliente de
+    # Supabase los exige posicionalmente y sin ellos revienta con
+    # «rpc() missing 1 required positional argument: 'params'».
+    resp = auth.supabase.schema("core").rpc("compradores_seguidos", {}).execute()
     return [(str(f["rut"]), f.get("seguidores", 1)) for f in (resp.data or []) if f.get("rut")]
 
 

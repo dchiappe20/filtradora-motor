@@ -196,8 +196,14 @@ def _vencida(fecha_texto, ahora):
     return bool(pd.notna(fecha) and fecha < ahora)
 
 
-def revisar_estado(empresa_id, nombre="", corte=None, log=print):
+def revisar_estado(empresa_id, nombre="", corte=None, log=print, avisar=None):
     """Refresca el estado de lo que la empresa sigue. -> dict con el resumen.
+
+    `avisar(revisadas, total)` se llama al terminar cada lote. Hace falta porque
+    esta fase se lleva hasta 55 minutos y quien la mira desde la app no tiene por
+    qué quedarse sin noticias: la app da por colgada una descarga cuya fila no se
+    refresca en 180 segundos, así que sin esto la barra se apagaba a mitad del
+    barrido aunque todo fuera bien.
 
     `corte` es una marca de `time.monotonic()` a partir de la cual se para y se
     guarda lo que lleve. Es lo que impide que el seguimiento se coma el barrido:
@@ -296,6 +302,8 @@ def revisar_estado(empresa_id, nombre="", corte=None, log=print):
             sin_tiempo = True
             break
 
+        if avisar:
+            avisar(revisadas, len(por_revisar))
         lote = por_revisar[i:i + LOTE_REVISION]
         fallidas_lote = 0
         with ThreadPoolExecutor(max_workers=HILOS_REVISION) as pool:

@@ -373,9 +373,21 @@ def _filtrar_y_seguir(empresas, modo):
             print(f"  Sin tiempo para {nombre} ({id_corto(empresa_id)}); "
                   "le toca en la próxima corrida.", flush=True)
             continue
+        def _avisar_seguimiento(revisadas, total, i=i):
+            """La fila de estado tiene que seguir latiendo durante toda la fase.
+
+            El avance mezcla las dos cosas que avanzan: por qué empresa va y por
+            dónde va dentro de ella. El texto no nombra a ninguna: la fila es la
+            misma para todas y ahí no puede salir el nombre de otra empresa.
+            """
+            dentro = (revisadas / total) if total else 1
+            _publicar("corriendo", "Confirmando el estado de tus cotizaciones...",
+                      _progreso_global(100 * (i + dentro) / max(len(empresas), 1)))
+
         try:
             res_seg = seguimiento_compra_agil.revisar_estado(
-                empresa_id, nombre, corte=corte, log=escribir)
+                empresa_id, nombre, corte=corte, log=escribir,
+                avisar=_avisar_seguimiento)
             total_cambios += res_seg.get("cambios", 0)
             total_pendientes += res_seg.get("pendientes", 0)
         except Exception as e:
