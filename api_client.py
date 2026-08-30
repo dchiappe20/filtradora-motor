@@ -70,6 +70,40 @@ def get_fechas_rango(fecha_inicio_str, fecha_fin_str):
         f_inicio += timedelta(days=1)
     return fechas
  
+def comprador_de(codigo):
+    """Organismo que publicó esa licitación. -> (rut, nombre, error)
+
+    Una sola consulta, para dar de alta a un cliente a partir del ID de una de
+    sus licitaciones (ver `compradores.registrar_desde_codigo`). No guarda nada:
+    lo que interesa es quién compra, no la licitación.
+    """
+    try:
+        resp = requests.get(URL_API,
+                            params={"codigo": codigo, "ticket": ticket_mercado_publico()},
+                            timeout=30)
+    except Exception as e:
+        return "", "", f"No se pudo consultar Mercado Público: {e}"
+
+    if resp.status_code != 200:
+        return "", "", f"Mercado Público respondió {resp.status_code}. Inténtalo de nuevo."
+
+    try:
+        datos = resp.json()
+    except Exception:
+        return "", "", "Mercado Público devolvió una respuesta ilegible."
+
+    listado = datos.get("Listado") or []
+    if not listado:
+        # La API contesta 200 con un 'Mensaje' cuando el código no existe o
+        # cuando el ticket está saturado; se distinguen mirando si hay listado.
+        aviso = str(datos.get("Mensaje") or "").strip()
+        return "", "", (aviso or f"Mercado Público no encontró la licitación {codigo}.")
+
+    comprador = (listado[0].get("Comprador") or {})
+    return (comprador.get("RutUnidad", ""),
+            comprador.get("NombreOrganismo", ""), "")
+
+
 def procesar_licitacion(codigo, fecha_exacta_str):
     filas = []
     # Backoff exponencial y varios reintentos: la API oficial limita fuerte por
@@ -98,7 +132,13 @@ def procesar_licitacion(codigo, fecha_exacta_str):
                 if not f_pub.startswith(fecha_exacta_str):
                     return filas, "OTRA_FECHA"
                 
-                comprador = detalle.get("Comprador", {}).get("NombreOrganismo", "Desconocido")
+                info_comprador = detalle.get("Comprador", {}) or {}
+                comprador = info_comprador.get("NombreOrganismo", "Desconocido")
+                # `RutUnidad` es el RUT del organismo comprador. Se guarda para
+                # poder decir de quién es cada licitación sin comparar nombres,
+                # que vienen con mayúsculas, tildes y espacios a su antojo (lo
+                # usa el módulo de clientes seguidos).
+                rut_comprador = info_comprador.get("RutUnidad", "")
                 f_cierre = fechas.get("FechaCierre", "")
                 
                 items_data = detalle.get("Items")
@@ -125,6 +165,7 @@ def procesar_licitacion(codigo, fecha_exacta_str):
                             "Numero Adquisición": codigo,
                             "Nombre Adquisición": detalle.get("Nombre", ""),
                             "Organismo": comprador,
+                            "RUT Organismo": rut_comprador,
                             "Fecha Publicación": f_pub,
                             "Fecha Cierre": f_cierre,
                             "Cantidad": item.get("Cantidad", 0),
@@ -243,7 +284,7 @@ def gestionar_descarga_rango(fecha_inicio_str, fecha_fin_str, callback_estado=No
     if callback_estado: callback_estado("Subiendo datos a la nube...", 100)
 
     columnas_completas = [
-        "Numero Adquisición", "Nombre Adquisición", "Organismo",
+        "Numero Adquisición", "Nombre Adquisición", "Organismo", "RUT Organismo",
         "Fecha Publicación", "Fecha Cierre", "Cantidad",
         "Descripción Producto", "Texto Filtrado",
     ]

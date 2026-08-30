@@ -447,6 +447,39 @@ def revisar_codigo(sesion, codigo, variantes_norm):
         }
 
 
+def olvidar_hallazgos(codigos):
+    """Borra de la lista principal las menciones de esas licitaciones. -> cuántas.
+
+    Se usa cuando una licitación deja de estar en evaluación: adjudicada,
+    desierta o revocada. Ahí ya no hay nada que responder, así que sus preguntas
+    no pintan nada en una lista que existe para no dejar sin contestar lo que
+    todavía se puede contestar.
+
+    Sin esto se quedaban hasta 30 días —lo que tarda la poda por antigüedad— y
+    la lista mezclaba lo que urge con lo que ya no se puede hacer.
+    """
+    codigos = [str(c).strip() for c in dict.fromkeys(codigos or []) if str(c).strip()]
+    if supabase is None or not codigos:
+        return 0
+    empresa_id = _empresa_id()
+    if not empresa_id:
+        return 0
+
+    _lock_supabase.acquire()
+    try:
+        for i in range(0, len(codigos), 100):
+            lote = codigos[i:i + 100]
+            ejecutar_con_refresco(lambda lote=lote: supabase.table(TABLA_ACTUALES)
+                                  .delete().eq("empresa_id", empresa_id)
+                                  .in_("codigo", lote).execute())
+        return len(codigos)
+    except Exception as e:
+        print(f"  aviso: no se pudieron olvidar las menciones: {e}", flush=True)
+        return 0
+    finally:
+        _lock_supabase.release()
+
+
 def registrar_revision(resultados):
     """Acumula resultados en historial + actuales para la empresa actual
     (EMPRESA_ID del entorno o la sesión). Público para el runner nocturno."""

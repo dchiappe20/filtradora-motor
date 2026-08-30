@@ -31,7 +31,6 @@ import pandas as pd
 import compra_agil_api
 import datos_nube
 import filtros_manager
-import preferencias_empresa
 import processor
 
 # Hilos con los que se piden las fichas del seguimiento. Bastante por debajo de
@@ -60,7 +59,7 @@ def _ahora_iso():
 
 
 def _fijar_empresa(empresa_id, nombre=""):
-    """Todo el stack (datos_nube, filtros_manager, preferencias_empresa) saca la
+    """Todo el stack (datos_nube, filtros_manager) saca la
     empresa del entorno cuando no hay sesión. El barrido va empresa por empresa,
     así que se cambia aquí en cada vuelta."""
     os.environ["EMPRESA_ID"] = str(empresa_id)
@@ -159,18 +158,12 @@ def filtrar_para_empresa(empresa_id, nombre="", df_crudo=None,
         datos_nube.guardar_seguimiento(pd.DataFrame())
         return {"cotizaciones": 0, "filas": 0, "omitida": False, "motivo": ""}
 
-    # La preferencia de la empresa recorta lo que se seguirá. Se lee de la nube
-    # y se fuerza el refresco: en un barrido largo el cache podría ser de hace
-    # horas y la preferencia haber cambiado.
-    preferencia = preferencias_empresa.llamado_seguimiento(empresa_id, refrescar=True)
-    if preferencia != preferencias_empresa.POR_DEFECTO:
-        antes = df_filtrado[_COL_ID].nunique()
-        mascara = df_filtrado[_COL_LLAMADO].apply(
-            lambda v: preferencias_empresa.aplica_llamado(v, preferencia))
-        df_filtrado = df_filtrado[mascara]
-        despues = df_filtrado[_COL_ID].nunique() if not df_filtrado.empty else 0
-        log(f"  {nombre}: preferencia '{preferencia}' deja {despues} de {antes}.")
-
+    # Aquí había un recorte por llamado (1er / 2do / todas) que elegía cada
+    # empresa en Configuración. Se retiró el 2026-08-30: se descarga TODO lo
+    # publicado y el llamado es una columna más de la tabla, con su selector en
+    # la pantalla. Recortarlo antes de guardar tenía dos pegas — quien quisiera
+    # ver el otro llamado tenía que esperar al barrido siguiente, y una
+    # cotización que pasaba de 1er a 2do llamado desaparecía a mitad de camino.
     previas = datos_nube.estado_seguimiento_previo()
     ahora = _ahora_iso()
     df_filtrado = df_filtrado.copy()
