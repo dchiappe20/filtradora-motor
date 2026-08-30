@@ -76,21 +76,33 @@ MINUTOS_SEGUIMIENTO = {"completo": 0, "dia": 55}
 
 # EL NOCTURNO NO SE REPARTE. Es de todos, esté en el plan que esté: recorre los
 # 30 días de la ventana y es el único que vuelve sobre los días viejos, así que
-# sin él ninguna empresa tendría al día su conjunto filtrado. `barridos_dia`
-# cuenta los DIURNOS, que es lo que de verdad separa a un plan de otro.
-RANURA_SIEMPRE = "noche"
+# sin él ninguna empresa tendría al día su conjunto filtrado.
+# Y DESDE EL 2026-08-28, TAMPOCO EL MEDIODÍA. Es el único diurno que queda y lo
+# tienen todos los planes, así que no hay nada que repartir: si dependiera de
+# `barridos_dia`, una empresa con un valor viejo guardado (un `2`, que repartía
+# mañana y tarde) se quedaría sin ningún repaso, en silencio y sin que nadie lo
+# notara hasta que faltaran cotizaciones.
+RANURAS_SIEMPRE = ("noche", "mediodia")
 
 # Los diurnos, y a quién alcanza cada combinación.
 #
 # El plan dice CUÁNTOS diurnos al día tiene una empresa; esta tabla dice CUÁLES,
 # que es lo que el motor necesita saber.
 #
-#   3  las tres pasadas: mañana, mediodía y tarde
-#   2  las dos de siempre, que es como funcionaba antes de los planes
-#   1  sólo el mediodía: un único refresco al filo de la jornada recoge lo
-#      publicado por la mañana y deja la tarde entera para reaccionar. A las
-#      10:00 se habría perdido casi todo el día; a las 15:00 llegaría tarde
-#      para preparar una oferta.
+#   1  el mediodía, que desde 2026-08-28 es el ÚNICO diurno de TODOS los planes.
+#      Un refresco al filo de la jornada recoge lo publicado por la mañana y
+#      deja la tarde entera para reaccionar; a las 10:00 se habría perdido casi
+#      todo el día y a las 15:00 llegaría tarde para preparar una oferta.
+#
+# Los repartos de 2 y 3 se quedan escritos porque las empresas con planes viejos
+# pueden seguir teniendo ese número guardado hasta que se les actualice, y
+# porque el motor no debe romperse por leer un valor que ya no se usa.
+#
+# ⚠ POR QUÉ SE PASÓ A UNO SOLO: cada diurno se lleva ~1h50m de Actions, y tres
+# al día eran 1.621 de los 2.000 minutos mensuales de la cuenta. El 26-08 se
+# agotaron y GitHub dejó de disparar TODAS las corridas programadas del repo.
+# Lo que diferencia ahora a los planes no es cuántas veces al día se repasa el
+# mercado entero, sino el módulo de Clientes (ver la clave `clientes`).
 RANURAS_POR_PLAN = {
     1: ("mediodia",),
     2: ("manana", "tarde"),
@@ -99,14 +111,13 @@ RANURAS_POR_PLAN = {
 
 RANURAS_VALIDAS = ("noche", "manana", "mediodia", "tarde", "todas")
 
-# La única ranura que puede saltarse entera cuando no le toca a nadie.
+# Ranuras que pueden saltarse enteras cuando no le tocan a nadie: NINGUNA.
 #
-# Las otras no: aunque no hubiera a quién filtrar, su DESCARGA alimenta la copia
-# compartida que leen todas las empresas. La del mediodía es la excepción porque
-# las de las 10:00 y las 15:00 ya cubren el mismo día, así que mientras no haya
-# ningún cliente que la tenga, esa corrida no aporta nada y sí gasta minutos de
-# Actions.
-RANURAS_OMITIBLES = ("mediodia",)
+# El mediodía lo era, cuando las de las 10:00 y las 15:00 cubrían el mismo día y
+# saltárselo no costaba nada. Desde que es el único diurno, saltárselo sería
+# quedarse sin repaso: su descarga alimenta la copia compartida que leen todas
+# las empresas, tengan el plan que tengan.
+RANURAS_OMITIBLES = ()
 
 # Cuánto del total pesa cada fase, para que la barra de la app avance MONÓTONA.
 # Una que vuelve a cero tres veces no informa: desconcierta.
@@ -227,8 +238,8 @@ def _barridos_del_plan(empresa):
 
 def _le_toca(empresa, ranura):
     """¿Se filtra a esta empresa en esta ranura?"""
-    if ranura in ("todas", RANURA_SIEMPRE):
-        return True          # el nocturno no depende del plan
+    if ranura == "todas" or ranura in RANURAS_SIEMPRE:
+        return True          # el nocturno y el repaso del mediodía son de todos
 
     cuantos = _barridos_del_plan(empresa)
     if cuantos is None:

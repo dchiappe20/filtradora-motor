@@ -1,4 +1,4 @@
-name: Barridos diurnos Compra Ágil (10:00, 12:00 y 15:00 Chile)
+name: Barrido diurno Compra Ágil (12:00 Chile)
 
 # Barridos CORTOS, tres veces al día: listan SÓLO lo publicado hoy, para que las
 # cotizaciones nuevas no esperen hasta la madrugada. No vuelven sobre los días
@@ -28,17 +28,9 @@ on:
     # año (UTC−4 en invierno, UTC−3 en verano). Por eso se programan las DOS
     # horas UTC posibles de cada barrido y el primer paso descarta la que no
     # corresponda según la hora real en Chile:
-    #   13:00 UTC = 10:00 (verano) | 09:00 (invierno)
-    #   14:00 UTC = 11:00 (verano) | 10:00 (invierno)
     #   15:00 UTC = 12:00 (verano) | 11:00 (invierno)
     #   16:00 UTC = 13:00 (verano) | 12:00 (invierno)
-    #   18:00 UTC = 15:00 (verano) | 14:00 (invierno)
-    #   19:00 UTC = 16:00 (verano) | 15:00 (invierno)
-    # Las tres corridas que se descartan terminan en segundos y casi no gastan
-    # minutos de Actions.
-    #
-    # El barrido de la tarde se adelantó de las 16:00 a las 15:00 para que sus
-    # resultados estén disponibles antes de que termine la jornada.
+    # La corrida que se descarta termina en segundos y casi no gasta minutos.
     # LOS MINUTOS NO SON REDONDOS A PROPÓSITO (2026-08-27).
     #
     # La noche del 26 al 27 no disparó NINGUNA corrida programada del repo —ni
@@ -55,7 +47,7 @@ on:
     #
     # El minuto no afecta al guardia de abajo, que mira la HORA en Chile
     # (`date +%H`): las ranuras siguen saliendo a las 10, 12 y 15.
-    - cron: '17 13,14,15,16,18,19 * * *'
+    - cron: '17 15,16 * * *'
   # A mano desde "Actions" -> "Run workflow": corre siempre, sea la hora que sea.
   workflow_dispatch: {}
 
@@ -112,9 +104,7 @@ jobs:
             echo "Llego tarde y cruzo de hora: su ranura es la de las $hora."
           fi
           case "$hora" in
-            10) ranura=manana ;;
             12) ranura=mediodia ;;
-            15) ranura=tarde ;;
             *)  ranura= ;;
           esac
           if [ "${{ github.event_name }}" != "schedule" ]; then
