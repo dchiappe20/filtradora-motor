@@ -6,19 +6,15 @@ Corre 1×/noche en GitHub Actions con la service_role. Para cada empresa con la 
 'filt' activa, recorre su lista de licitaciones ofertadas (`foro_ofertadas`) y:
 
   - EGRESA (elimina de la lista) la licitación si lleva > 1 año o si dejó de estar
-    CERRADA (adjudicada/desierta/revocada...).
+    CERRADA (adjudicada/desierta/revocada...), y en ese caso BORRA además sus
+    menciones de la lista principal: en una licitación ya resuelta no queda nada
+    que contestar a tiempo.
   - REVISA el foro de aclaración de las que siguen CERRADA (en evaluación),
     detectando el NOMBRE de la empresa (del registro central) y acumulando los
-    hallazgos en foro_inverso_actuales / foro_inverso_historial.
+    hallazgos en foro_inverso_actuales.
 
 El INGRESO (llenar `foro_ofertadas`) queda pendiente: mientras la lista esté vacía,
 este runner no hace nada. La empresa se fija por iteración con EMPRESA_ID/EMPRESA_NOMBRE.
-
-SÓLO PARA QUIEN LA TIENE CONTRATADA. `foros` es una función del plan —el nivel
-Terreno no la lleva— y esto es lo que cuesta de verdad: una ronda de consultas
-al portal por cada licitación ofertada de cada empresa. Filtrar aquí es lo único
-que hace que ese `false` del plan signifique algo, porque el gasto ocurre en el
-servidor aunque el cliente nunca abra la pantalla.
 """
 import os
 import sys
@@ -35,26 +31,9 @@ _UN_ANIO = timedelta(days=365)
 
 
 def _empresas_objetivo():
-    """[(empresa_id, nombre)] de las empresas con la vigilancia de foros incluida."""
     resp = auth.supabase.schema("core").rpc(
         "empresas_de_app", {"p_codigo_app": auth.CODIGO_APP}).execute()
-    return [(str(e["id"]), e.get("nombre", ""))
-            for e in (resp.data or [])
-            if e.get("id") and _tiene_foros(e)]
-
-
-def _tiene_foros(empresa) -> bool:
-    """¿El plan de esta empresa incluye la vigilancia de foros?
-
-    Ante la duda, sí. Si `limites` no viene —una base sin
-    28_barridos_por_plan.sql, que es la que empezó a mandarlos— se revisa igual:
-    dejar a un cliente sin su vigilancia por un despliegue a medias es peor que
-    revisar de más una noche.
-    """
-    limites = empresa.get("limites")
-    if not isinstance(limites, dict) or "foros" not in limites:
-        return True
-    return bool(limites["foros"])
+    return [(str(e["id"]), e.get("nombre", "")) for e in (resp.data or []) if e.get("id")]
 
 
 def _ofertadas(empresa_id):
@@ -97,7 +76,7 @@ def _revisar_empresa(empresa_id, nombre):
 
     sesion = foro_inverso.crear_sesion_publica()
     renovar_cada = max(50, config.FORO_INVERSO_RENOVAR_SESION_CADA)
-    a_eliminar, resultados, revisados = [], [], []
+    a_eliminar, a_olvidar, resultados, revisados = [], [], [], []
     n = 0
 
     for fila in filas:
@@ -114,15 +93,26 @@ def _revisar_empresa(empresa_id, nombre):
         if est in ("publicada", "desconocido"):
             continue  # aún no cierra / no se pudo saber: se conserva, sin revisar foro
 
-        # Cerrada o resuelta: se revisa el foro (los foros de aclaración persisten
-        # tras adjudicar). Si ya está resuelta, se revisa UNA última vez y se egresa.
+        # SÓLO LAS CERRADAS (en evaluación) son relevantes. Una adjudicada,
+        # desierta o revocada se egresa SIN revisar y además se lleva sus
+        # menciones de la lista principal.
+        #
+        # Antes se le daba una última pasada «por si acaso», y eso hacía justo lo
+        # contrario de lo que se quiere: volvía a registrar sus preguntas con la
+        # fecha de hoy, así que una licitación ya adjudicada seguía apareciendo
+        # entre lo pendiente otros 30 días, hasta que la poda por antigüedad se
+        # la llevaba. Lo que se pregunta en el foro de una adjudicada ya no se
+        # puede contestar a tiempo: no es trabajo pendiente, es ruido.
+        if est == "resuelta":
+            a_eliminar.append(codigo)
+            a_olvidar.append(codigo)
+            continue
+
         n += 1
         if n > 1 and (n - 1) % renovar_cada == 0:
             sesion = foro_inverso.crear_sesion_publica()
         resultados.append(foro_inverso.revisar_codigo(sesion, codigo, variantes))
         revisados.append(codigo)
-        if est == "resuelta":
-            a_eliminar.append(codigo)  # egresa DESPUÉS de revisar (ya no habrá foros nuevos)
         time.sleep(config.FORO_INVERSO_PAUSA_SEGUNDOS)
 
     if resultados:
@@ -135,12 +125,18 @@ def _revisar_empresa(empresa_id, nombre):
                  .eq("empresa_id", empresa_id).in_("codigo", revisados[i:i + 100]).execute())
         except Exception:
             pass
+    # Primero las menciones y después la lista: si se cae en medio, lo peor que
+    # queda es una licitación egresada cuyas menciones se limpian mañana, y no
+    # unas menciones huérfanas de algo que ya nadie vuelve a mirar.
+    if a_olvidar:
+        foro_inverso.olvidar_hallazgos(a_olvidar)
     if a_eliminar:
         _eliminar(empresa_id, a_eliminar)
 
     con_mencion = sum(1 for r in resultados if r.get("hallazgos"))
     print(f"  {nombre}: revisadas {len(revisados)}, con mención {con_mencion}, "
-          f"egresadas {len(a_eliminar)}.", flush=True)
+          f"egresadas {len(a_eliminar)} ({len(a_olvidar)} ya resueltas, sin revisar).",
+          flush=True)
 
 
 def main():
@@ -155,8 +151,7 @@ def main():
         return 1
 
     if not empresas:
-        print(f"Ninguna empresa activa con la app '{auth.CODIGO_APP}' tiene la "
-              "vigilancia de foros en su plan.", flush=True)
+        print(f"No hay empresas activas con la app '{auth.CODIGO_APP}'.", flush=True)
         return 0
 
     print(f"Revisión nocturna de foros inversos para {len(empresas)} empresa(s).", flush=True)
