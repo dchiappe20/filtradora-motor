@@ -9,15 +9,36 @@ estos datos vive aparte y no forma parte de este repositorio.
 
 ## Qué hace cada workflow
 
-| Workflow | Cuándo | Qué hace |
+| Workflow | Cuándo (hora de Chile) | Qué hace |
 |---|---|---|
-| `descarga-nocturna.yml` | 05:00 UTC | Barrido **completo** de Compra Ágil: recorre los 30 días de la ventana y filtra para cada empresa. |
-| `compra-agil-diurno.yml` | 13/14 y 19/20 UTC | Barridos **cortos**: lo publicado hoy, más el **seguimiento de estado** de lo ya filtrado. |
-| `foros-nocturno.yml` | 09:00 UTC | Revisa los foros de aclaración de las licitaciones ofertadas y detecta menciones. |
+| `descarga-nocturna.yml` | 01:00 | Barrido **completo** de Compra Ágil: recorre los 30 días de la ventana y filtra para cada empresa. |
+| `compra-agil-diurno.yml` | 12:00 | Barrido **corto**: lo publicado hoy, más el **seguimiento de estado** de lo ya filtrado. |
+| `foros-nocturno.yml` | 05:00 | Revisa los foros de aclaración de las licitaciones ofertadas y detecta menciones. |
 | `descarga-licitaciones.yml` | bajo demanda | Descarga las licitaciones de un rango de fechas. |
 
-Los horarios se programan en las **dos** horas UTC posibles porque Chile cambia
-de huso dos veces al año; el primer paso de cada job descarta la que no toca.
+### Quién pone la hora
+
+**Supabase, no GitHub.** Un `pg_cron` del proyecto llama a la API de GitHub y
+lanza cada barrido por `workflow_dispatch` a la hora exacta de Chile — cambio de
+huso incluido, porque la hora se compara contra `America/Santiago` y no contra
+UTC. Todo eso es un solo archivo: [`supabase/cron_barridos.sql`](supabase/cron_barridos.sql).
+
+El motivo es medido, no teórico: desde el 27-08-2026 **todas** las corridas
+programadas con el `schedule:` de GitHub salen entre 2 y 12 horas tarde, mientras
+que las lanzadas por `dispatch` arrancan en el mismo segundo en que se piden. El
+atraso además dejaba al diurno sin hacer nada: su guardia miraba el reloj para
+saber qué ranura era y, llegando a las 14:42, no se reconocía como el de las
+12:00 y se descartaba en silencio.
+
+Los `schedule:` siguen en los workflows como **respaldo**, con dos arreglos:
+
+- la ranura se deduce de la hora **programada** (`github.event.schedule`), no del
+  reloj, así que una corrida atrasada hace su trabajo en vez de evaporarse;
+- antes de correr, cada job le pregunta a la API si el disparo puntual ya cubrió
+  ese turno, y si ya está hecho no lo repite.
+
+Cada barrido se sigue programando en las **dos** horas UTC posibles porque Chile
+cambia de huso dos veces al año; el guardia descarta la que no toca.
 
 ## Filtrado y seguimiento
 
