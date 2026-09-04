@@ -3,30 +3,27 @@ name: Revisión nocturna Foros Inversos
 # Revisa cada noche, POR EMPRESA, los foros de aclaración de sus licitaciones
 # ofertadas (tabla foro_ofertadas): detecta menciones a la empresa y egresa las
 # que superan 1 año o dejan de estar CERRADA. El ingreso de la lista es aparte.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# QUIÉN LO DISPARA A LA HORA (2026-09-03)
+#
+# Supabase, con pg_cron, llamando a la API de GitHub (ver
+# `supabase/cron_barridos.sql`). El cron de aquí abajo quedó de RESPALDO: desde
+# el 27-08 arranca entre 4h y 7h44 tarde todas las noches.
+# ─────────────────────────────────────────────────────────────────────────────
 on:
   schedule:
-    # 09:00 UTC ≈ 05:00 Chile (después del nocturno de Compra Ágil).
-    # LOS MINUTOS NO SON REDONDOS A PROPÓSITO (2026-08-27).
-    #
-    # La noche del 26 al 27 no disparó NINGUNA corrida programada del repo —ni
-    # ésta ni las de los otros workflows— mientras que lanzar a mano seguía
-    # funcionando. Ese mismo día se veía el síntoma de la cola: los diurnos
-    # salieron 8, 33 y 43 minutos tarde y faltaron dos corridas.
-    #
-    # Los cron de Actions son «best effort» y la hora en punto es cuando más
-    # cola hay, que es justo cuando GitHub las atrasa o las tira. Correrse unos
-    # minutos es lo que recomiendan ellos y no cuesta nada.
-    #
-    # Si aun así siguen sin dispararse, el problema NO es la cola: sería el tope
-    # de uso medido de la cuenta, y se arregla en la facturación, no aquí.
+    # RESPALDO. 09:23 UTC ≈ 05:23 Chile (después del nocturno de Compra Ágil).
     - cron: '23 9 * * *'
+  # A mano desde "Actions" -> "Run workflow", y camino del disparo puntual.
   workflow_dispatch: {}
 
-# El token automatico del job no necesita escribir nada en el repositorio: solo
-# se clona el codigo. En un repositorio publico esto importa mas, porque cierra
-# lo que un workflow comprometido podria hacer con el.
 permissions:
+  # Sólo se clona el código: el token del job no necesita escribir en el repo.
   contents: read
+  # Para preguntarle a la API si el disparo puntual ya hizo la revisión de esta
+  # noche, y no repetirla desde el respaldo.
+  actions: read
 
 jobs:
   revisar:
@@ -35,19 +32,72 @@ jobs:
     concurrency:
       group: foros-nocturno
       cancel-in-progress: false
+    env:
+      ARCHIVO: foros-nocturno.yml
     steps:
+      - name: ¿Hace falta este respaldo?
+        id: guardia
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CRON: ${{ github.event.schedule }}
+          EVENTO: ${{ github.event_name }}
+        run: |
+          set -uo pipefail
+
+          if [ "$EVENTO" != "schedule" ]; then
+            echo "Disparo directo: se corre la revisión."
+            echo "corre=si" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # El instante que le TOCABA a esta corrida, reconstruido desde el cron
+          # que la disparó (no desde el reloj, que con el atraso ya no dice nada).
+          utc_m=$(echo "$CRON" | awk '{print $1}')
+          utc_h=$(echo "$CRON" | awk '{print $2}')
+          prog=$(date -u -d "$(date -u +%F) ${utc_h}:${utc_m}" +%s)
+          ahora=$(date -u +%s)
+          if [ "$prog" -gt "$ahora" ]; then
+            prog=$(date -u -d "$(date -u -d yesterday +%F) ${utc_h}:${utc_m}" +%s)
+          fi
+          atraso=$(( (ahora - prog) / 60 ))
+          desde=$(date -u -d "@$prog" +%Y-%m-%dT%H:%M:%SZ)
+          echo "Le tocaba a las $desde; arrancó $atraso min tarde."
+
+          ya=$(curl -sS --max-time 30 \
+                 -H "Authorization: Bearer $GH_TOKEN" \
+                 -H "Accept: application/vnd.github+json" \
+                 "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/$ARCHIVO/runs?event=workflow_dispatch&created=%3E$desde&per_page=1" \
+               | jq -r '.total_count')
+          # Ante la duda se CORRE: quedarse sin revisión es peor que repetirla.
+          if ! echo "$ya" | grep -qE '^[0-9]+$'; then
+            echo "No se pudo preguntar a la API si ya corrió: por si acaso, se corre."
+            ya=0
+          fi
+
+          if [ "$ya" -gt 0 ]; then
+            echo "Desde $desde ya hubo $ya corrida(s) por disparo puntual: este respaldo no hace falta."
+            echo "corre=no" >> "$GITHUB_OUTPUT"
+          else
+            echo "Nadie revisó los foros esta noche: lo hace este respaldo."
+            echo "corre=si" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Clonar repositorio
+        if: steps.guardia.outputs.corre == 'si'
         uses: actions/checkout@v4
 
       - name: Preparar Python
+        if: steps.guardia.outputs.corre == 'si'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
       - name: Instalar dependencias
+        if: steps.guardia.outputs.corre == 'si'
         run: pip install -r requirements.txt
 
       - name: Ejecutar revisión de foros
+        if: steps.guardia.outputs.corre == 'si'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           # service_role: recorre empresas de `core` y escribe hallazgos (salta RLS).
