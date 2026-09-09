@@ -3,6 +3,7 @@ import requests
 import pandas as pd
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+import threading
 import time
 import os
 
@@ -43,13 +44,49 @@ ESTADO_ABIERTA = "publicada"
 # Valor que entiende la API para pedir sólo las abiertas (ver `_listar_pagina`).
 ESTADO_PUBLICADA = 2
 
-# Techo de seguridad de páginas a recorrer al listar cotizaciones de UN día (50
-# ítems c/u). El listado se recorre día por día (no pidiendo la ventana entera)
-# porque el portal corta la paginación profunda (403/429) al pasar de ~100 páginas
-# seguidas; por día alcanza con ~85 páginas (~4.300 cotizaciones). El bucle se
-# detiene solo al alcanzar el `pageCount|` real del día, así que este número solo
-# evita un bucle infinito si la API se comporta mal. 300 deja margen holgado.
-MAX_PAGINAS_LISTADO = 300
+# Cuántas cotizaciones se piden por página del listado.
+#
+# ERA 50 —el máximo que acepta la API— y ése fue el problema. El portal tarda
+# ~0,55 s por ítem, así que una página de 50 se va a ~28 s… y su propio API
+# Gateway corta en seco a los 29 con `504 Endpoint request timed out`. O sea que
+# el valor máximo estaba JUSTO encima del techo: cada página era una moneda al
+# aire, y en cuanto el portal se cargaba un poco salían todas cruz.
+#
+# Medido contra el portal el 2026-09-09 a mediodía, misma consulta y mismas
+# cabeceras que usa este módulo:
+#
+#   page_size=50 -> 6 de 8 peticiones con 504 (cortadas a 29,3-29,7 s)
+#   page_size=40 -> 1 de 3 bien (un 502 y un 504)
+#   page_size=30 -> 3 de 3 bien, 17-22 s
+#   page_size=20 -> 5 de 5 bien, 13-18 s
+#   page_size=10 -> 1 de 1 bien, 5,7 s
+#
+# No es paginación profunda: con 50 falla igual la página 1 que la 55, y con 20
+# va bien hasta la 137. Es el tamaño de la página y nada más.
+#
+# 20 y no 30 porque el margen importa más que el número de peticiones: el trabajo
+# total es el mismo (el portal sirve los ítems que sirve) y lo que se gana con
+# páginas grandes son menos viajes, no menos segundos. Con 20 quedan ~14 s contra
+# un techo de 29, sitio de sobra para que un mal día del portal no lo tire.
+PAGINA_LISTADO = 20
+
+# Suelo del troceo adaptativo (ver `_listar_pagina`). Por debajo de esto, partir
+# la página deja de compensar: son el doble de viajes para ahorrar segundos que
+# ya no sobran.
+PAGINA_LISTADO_MINIMA = 5
+
+# Techo de seguridad de páginas a recorrer al listar cotizaciones de UN día. El
+# listado se recorre día por día (no pidiendo la ventana entera) porque el portal
+# corta la paginación profunda (403/429) al pasar de ~100 páginas seguidas; por
+# día son ~4.300 cotizaciones en el peor caso. El bucle se detiene solo al
+# alcanzar el `pageCount` real del día, así que este número solo evita un bucle
+# infinito si la API se comporta mal.
+#
+# Eran 300 cuando las páginas traían 50. Con 20 hacen falta 2,5 veces más para
+# cubrir lo mismo (4.300 / 20 = 215), así que sube a 500 para conservar el margen
+# que había: dejarlo en 300 habría convertido el techo de seguridad en un tope
+# real que corta días cargados por la mitad.
+MAX_PAGINAS_LISTADO = 500
 
 # Cuánto se espera una página del listado antes de darla por perdida.
 #
@@ -83,6 +120,30 @@ RONDAS_RESCATE = 5
 # Espera entre rondas de rescate. Insistir al instante no sirve de nada cuando el
 # portal está saturado: lo que lo arregla es dejarlo respirar.
 ESPERA_RESCATE = 20
+
+# Cuánto se insiste, como mucho, con el listado de UN día.
+#
+# Hasta ahora sólo existía el corte global de la corrida (100 min en el barrido
+# del día), y eso dejaba que un solo día se comiera el presupuesto de todo lo
+# demás. Son DOS topes porque son dos situaciones que no se parecen en nada:
+#
+#   · SEGUNDOS_PRIMERA_PAGINA acota insistir con la página 1. Si no llega, el día
+#     entero se pierde igual, así que repetirla no rescata nada. El 2026-09-09
+#     fueron 12 min 28 s tirados ahí —medido: 6 llamadas x (3 intentos x 29 s +
+#     21 s de esperas) + 5 x 20 s entre rondas—, y esos 12 minutos salieron del
+#     presupuesto del seguimiento, que ese día acabó con 508 cotizaciones sin
+#     revisar. Con 3 min caben tres ciclos completos de reintento (~57 s cada
+#     uno) más el troceo adaptativo; si en eso no contestó, no va a contestar.
+#
+#   · SEGUNDOS_POR_DIA_LISTADO acota el día completo, rescates incluidos. Aquí
+#     insistir SÍ rescata: son cotizaciones que se traen. Medido el 2026-09-09
+#     listando el día entero con el tamaño nuevo: 149 páginas, 2.872
+#     cotizaciones, 0 perdidas, 9 min 12 s — y eso recuperando 21 peticiones que
+#     el portal devolvió con 504. O sea que un tope de 5 min habría cortado los
+#     rescates de un día que acabó saliendo COMPLETO. 15 deja margen sobre ese
+#     peor caso medido sin dejar que un día se lleve la corrida entera.
+SEGUNDOS_PRIMERA_PAGINA = 180
+SEGUNDOS_POR_DIA_LISTADO = 900
 
 # Peticiones en paralelo al listar páginas y bajar fichas. El cuello de botella es
 # la latencia de la API (no CPU ni ancho de banda), sobre todo desde servidores
@@ -142,7 +203,67 @@ COLUMNAS_COMPLETAS = [
 ]
 
 
-def _listar_pagina(date_from, date_to, page_number, page_size=50):
+# ---------------------------------------------------------------------------
+# Por qué se cayó una petición
+#
+# EL AGUJERO QUE TAPA
+#
+# `_listar_pagina` tenía un `except Exception: time.sleep(espera)` y un `return
+# None` sin decir nada. El 2026-09-09 el barrido del mediodía hizo 18 peticiones
+# fallidas seguidas y terminó en rojo con «el portal no respondió al listar 1
+# día(s)»: ni una sola línea del log decía que las 18 eran `504 Endpoint request
+# timed out`. Averiguarlo costó ir a golpear el portal a mano.
+#
+# ESTO NO SE LE ENSEÑA AL CLIENTE
+#
+# Todo lo de aquí sale por `print`, o sea al log de GitHub Actions y a nada más.
+# NO pasa por `callback_estado`, que es el canal que acaba en `descarga_estado` y
+# de ahí en la barra de la app. El cliente sigue viendo «Descargando N
+# cotizaciones...»; que el portal devuelva 504 es cosa nuestra, no suya.
+#
+# El contador es de módulo y con candado porque las páginas se piden desde varios
+# hilos (`MAX_WORKERS`). Se vacía al empezar cada día, y los días se recorren de
+# uno en uno, así que el resumen que se imprime es siempre el del día que acaba.
+# ---------------------------------------------------------------------------
+
+_fallos_lock = threading.Lock()
+_fallos = {}
+
+
+def _anotar_fallo(causa):
+    with _fallos_lock:
+        _fallos[causa] = _fallos.get(causa, 0) + 1
+
+
+def _vaciar_fallos():
+    with _fallos_lock:
+        _fallos.clear()
+
+
+def _resumen_fallos():
+    """«504 Endpoint request timed out x16, sin respuesta en 60s x2», o ''."""
+    with _fallos_lock:
+        if not _fallos:
+            return ""
+        partes = sorted(_fallos.items(), key=lambda kv: -kv[1])
+    return ", ".join(f"{causa} x{veces}" for causa, veces in partes)
+
+
+def _diag(mensaje):
+    """Al log de la corrida y a ningún otro sitio. Ver el bloque de arriba."""
+    print(f"[portal] {mensaje}", flush=True)
+
+
+def _es_de_tamano(causa):
+    """¿El fallo huele a «esta página era demasiado grande para el gateway»?
+
+    Sólo entonces tiene sentido partirla: un 403 o un 429 son el portal diciendo
+    que le estamos pidiendo DEMASIADO, y trocear haría el doble de viajes, que es
+    exactamente lo contrario de lo que hace falta."""
+    return ("504" in causa) or ("408" in causa) or causa.startswith("sin respuesta")
+
+
+def _listar_pagina(date_from, date_to, page_number, page_size=None):
     # page_size está topado en 50 por la API (valores mayores devuelven 400), por
     # eso recorrer la ventana completa exige muchas páginas.
     #
@@ -151,6 +272,7 @@ def _listar_pagina(date_from, date_to, page_number, page_size=50):
     # Pedir sólo las abiertas recorta muchísimo: en un día de hace 8 jornadas
     # baja de 77 páginas a 2 (−97%), porque casi todo lo de esos días ya cerró.
     # Comprobado que no se pierde ninguna abierta al filtrar.
+    page_size = page_size or PAGINA_LISTADO
     params = {
         "page_number": page_number,
         "page_size": page_size,
@@ -160,24 +282,107 @@ def _listar_pagina(date_from, date_to, page_number, page_size=50):
         "date_to": date_to,
     }
     espera = 3
+    causa = "sin intentos"
     for _ in range(INTENTOS_LISTADO):
         try:
             resp = requests.get(API_URL, params=params, headers=_HEADERS,
                                 timeout=TIMEOUT_LISTADO)
             if resp.status_code == 200:
                 return resp.json().get("payload") or {}
+            # El texto del cuerpo entra en la causa porque es donde el portal
+            # dice qué le pasó: los 504 del gateway llegan con
+            # `{"message": "Endpoint request timed out"}`, y saber eso es la
+            # diferencia entre «el portal falla» y «le estamos pidiendo páginas
+            # que no le caben».
+            causa = f"HTTP {resp.status_code} {_motivo(resp)}".strip()
             # 403/429: el portal limita la paginación rápida/profunda. 5xx/408:
             # error transitorio. En ambos casos reintentamos con espera creciente.
             if resp.status_code in (403, 408, 429, 500, 502, 503, 504):
+                _anotar_fallo(causa)
                 time.sleep(espera)
                 espera = min(espera * 2, 30)
                 continue
             # Otros (p. ej. 400 por parámetros) no se arreglan reintentando.
+            _anotar_fallo(f"{causa} (no se reintenta)")
             return None
-        except Exception:
+        except requests.Timeout:
+            causa = f"sin respuesta en {TIMEOUT_LISTADO}s"
+            _anotar_fallo(causa)
             time.sleep(espera)
             espera = min(espera * 2, 30)
+        except Exception as e:
+            causa = type(e).__name__
+            _anotar_fallo(causa)
+            time.sleep(espera)
+            espera = min(espera * 2, 30)
+
+    # ---- Troceo adaptativo -------------------------------------------------
+    #
+    # Agotados los intentos. Si lo que falló huele a página demasiado grande, no
+    # tiene ningún sentido volver a pedir LA MISMA: ya sabemos que no cabe en el
+    # gateway. Se pide partida en dos, que es lo que sí cabe.
+    #
+    # La equivalencia es exacta porque la API pagina por desplazamiento: la
+    # página N de tamaño S son los mismos ítems que las páginas 2N-1 y 2N de
+    # tamaño S/2. Por eso sólo se parte con tamaños pares.
+    if (_es_de_tamano(causa) and page_size > PAGINA_LISTADO_MINIMA
+            and page_size % 2 == 0):
+        return _listar_pagina_partida(date_from, date_to, page_number, page_size)
     return None
+
+
+def _motivo(resp):
+    """El `message` que trae el error, recortado. Vacío si no hay nada legible."""
+    try:
+        texto = (resp.json() or {}).get("message") or ""
+    except Exception:
+        texto = (resp.text or "")[:80]
+    return str(texto).strip()[:80]
+
+
+def _listar_pagina_partida(date_from, date_to, page_number, page_size):
+    """La misma página, pedida en dos mitades.
+
+    Devuelve un payload con la MISMA forma que devolvería la petición entera, y
+    ahí está el detalle que importa: `pageCount` se recalcula a la escala que
+    pidió quien llama. El del trozo es el doble (hay el doble de páginas cuando
+    son la mitad de grandes), y devolverlo tal cual haría que `_listar_dia`
+    recorriera el doble de páginas, la mitad de ellas vacías.
+    """
+    mitad = page_size // 2
+    primera = page_number * 2 - 1
+
+    trozos = []
+    for p in (primera, primera + 1):
+        trozo = _listar_pagina(date_from, date_to, p, mitad)
+        # La segunda mitad puede venir vacía si la página era la última del día,
+        # y eso es correcto; lo que no vale es que falle, porque entonces
+        # faltarían cotizaciones sin que nadie se entere.
+        if trozo is None:
+            return None
+        trozos.append(trozo)
+
+    resultados = []
+    for t in trozos:
+        resultados.extend(t.get("resultados") or [])
+
+    total = next((t.get("resultCount") for t in trozos
+                  if isinstance(t.get("resultCount"), (int, float))), None)
+    if total is None:
+        paginas = trozos[0].get("pageCount")
+    else:
+        paginas = -(-int(total) // page_size)   # techo de la división
+
+    _diag(f"página {page_number} de {page_size} no cabía en el portal: "
+          f"servida en 2 de {mitad} ({len(resultados)} cotizaciones).")
+
+    return {
+        "resultCount": total,
+        "pageCount": paginas,
+        "page": page_number,
+        "pageSize": page_size,
+        "resultados": resultados,
+    }
 
 
 def _obtener_ficha(codigo):
@@ -409,10 +614,25 @@ def _listar_dia(dia_str, cancel_event, al_llegar, callback_estado=None, corte=No
 
     La página 1 va aparte porque es la que revela `pageCount`: sin ella el día
     entero se pierde en silencio, que es justo lo que pasó el 2026-08-12 a las
-    16:00."""
+    16:00.
+
+    Este día tiene además su propio tope de tiempo (`SEGUNDOS_POR_DIA_LISTADO`)
+    por encima del `corte` de la corrida: sin él, un día que no responde se comía
+    el presupuesto de todo lo demás insistiendo con la misma petición."""
+    # El día empieza con el contador de fallos limpio para que el resumen que se
+    # imprima al final sea el suyo y no arrastre el del día anterior.
+    _vaciar_fallos()
+
+    ahora = time.monotonic()
+    limite_dia = ahora + SEGUNDOS_POR_DIA_LISTADO
+    corte_dia = limite_dia if corte is None else min(corte, limite_dia)
+    # La página 1 se rinde antes que el resto: ver el comentario de las dos
+    # constantes. Insistir con ella no rescata nada, insistir con las demás sí.
+    corte_p1 = min(corte_dia, ahora + SEGUNDOS_PRIMERA_PAGINA)
+
     payload = _listar_pagina(dia_str, dia_str, 1)
     for ronda in range(RONDAS_RESCATE):
-        if payload or _agotado(corte):
+        if payload or _agotado(corte_p1):
             break
         if callback_estado:
             callback_estado(
@@ -420,7 +640,10 @@ def _listar_dia(dia_str, cancel_event, al_llegar, callback_estado=None, corte=No
                 f"({ronda + 1}/{RONDAS_RESCATE})...", None)
         time.sleep(ESPERA_RESCATE)
         payload = _listar_pagina(dia_str, dia_str, 1)
+
     if not payload:
+        # El único sitio donde queda escrito POR QUÉ se perdió el día entero.
+        _diag(f"día {dia_str}: la página 1 nunca llegó — {_resumen_fallos() or 'sin detalle'}")
         return 0, False
 
     al_llegar(payload)
@@ -430,7 +653,7 @@ def _listar_dia(dia_str, cancel_event, al_llegar, callback_estado=None, corte=No
     # Páginas 2..page_count EN PARALELO (la latencia de la API domina, no la CPU),
     # y otras tantas rondas sobre las que se caigan.
     for ronda in range(RONDAS_RESCATE + 1):
-        if not pendientes or (ronda and _agotado(corte)):
+        if not pendientes or (ronda and _agotado(corte_dia)):
             break
         if ronda:
             if callback_estado:
@@ -439,6 +662,11 @@ def _listar_dia(dia_str, cancel_event, al_llegar, callback_estado=None, corte=No
                     f"caer del día {dia_str} ({ronda}/{RONDAS_RESCATE})...", None)
             time.sleep(ESPERA_RESCATE)
         pendientes = _pedir_paginas(dia_str, pendientes, cancel_event, al_llegar)
+
+    resumen = _resumen_fallos()
+    if resumen:
+        _diag(f"día {dia_str}: {page_count} página(s) de {PAGINA_LISTADO}, "
+              f"{len(pendientes)} sin recuperar — {resumen}")
     return len(pendientes), True
 
 
