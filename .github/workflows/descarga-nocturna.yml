@@ -80,14 +80,35 @@ jobs:
             prog=$(date -u -d "$(date -u -d yesterday +%F) ${utc_h}:${utc_m}" +%s)
           fi
           atraso=$(( (ahora - prog) / 60 ))
-          desde=$(date -u -d "@$prog" +%Y-%m-%dT%H:%M:%SZ)
-          echo "Le tocaba a las $desde; arrancó $atraso min tarde."
+          nominal=$(date -u -d "@$prog" +%Y-%m-%dT%H:%M:%SZ)
+          echo "Le tocaba a las $nominal; arrancó $atraso min tarde."
 
+          # ¿Ya hizo el disparo puntual de Supabase el barrido de esta noche?
+          #
+          # LA VENTANA EMPIEZA 2 h ANTES DE LA HORA NOMINAL DEL CRON (2026-09-10).
+          #
+          # Buscando desde el instante exacto del cron no encontraba NUNCA nada,
+          # y el respaldo repetía el barrido entero todos los días. El motivo: el
+          # disparo puntual sale a la hora EN PUNTO de Chile y estos cron van a
+          # minutos sueltos MÁS TARDE, así que el disparo caía siempre fuera de la
+          # ventana por delante. Medido el 09-10: diurno 15:00:02 UTC contra un
+          # cron de las 15:17 (17 min), nocturno 04:00:02 contra las 05:07 (67
+          # min), foros 08:00:02 contra las 09:23 (83 min). Los dos últimos se
+          # descuadran más en horario de verano, porque su cron tiene una sola
+          # hora UTC y Chile se mueve. Dos horas cubre todos los casos y no llega
+          # al disparo del día anterior, que está a 24 h.
+          desde=$(date -u -d "@$((prog - 7200))" +%Y-%m-%dT%H:%M:%SZ)
+          # Una corrida FALLIDA no cuenta como cubierta: si el disparo puntual se
+          # cayó (pasó el 09-09), este respaldo tiene que hacer el trabajo. Las
+          # que aún están corriendo (conclusion null) sí cuentan, o el respaldo se
+          # pondría en cola detrás sólo para repetir lo mismo.
           ya=$(curl -sS --max-time 30 \
                  -H "Authorization: Bearer $GH_TOKEN" \
                  -H "Accept: application/vnd.github+json" \
-                 "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/$ARCHIVO/runs?event=workflow_dispatch&created=%3E$desde&per_page=1" \
-               | jq -r '.total_count')
+                 "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/$ARCHIVO/runs?event=workflow_dispatch&created=%3E$desde&per_page=30" \
+               | jq '[.workflow_runs[]
+                      | select(.conclusion != "failure" and .conclusion != "cancelled")]
+                     | length')
           # Ante la duda se CORRE: perder una noche entera de barrido completo es
           # mucho peor que repetirlo.
           if ! echo "$ya" | grep -qE '^[0-9]+$'; then
