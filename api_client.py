@@ -55,10 +55,6 @@ COLUMNAS_COMPLETAS = [
 ]
 
 
-def _get_appdata_dir() -> str:
-    path = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "Amilab")
-    os.makedirs(path, exist_ok=True)
-    return path
  
 def estado_licitacion(codigo):
     """Estado actual de una licitación, para el barrido de foros:
