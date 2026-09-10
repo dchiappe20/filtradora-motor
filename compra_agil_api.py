@@ -188,12 +188,6 @@ LOTE_GUARDADO = 500
 DIAS_VENTANA = 30
 
 
-def _get_appdata_dir() -> str:
-    path = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "Amilab")
-    os.makedirs(path, exist_ok=True)
-    return path
-
-
 # Tabla en Supabase donde viven los datos (reemplaza al Excel local)
 TABLA_NUBE = "compra_agil"
 
