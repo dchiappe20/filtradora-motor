@@ -179,7 +179,8 @@ end $$;
 -- reemplaza sin duplicarlo.
 select cron.unschedule(jobname)
   from cron.job
- where jobname in ('barrido-mediodia', 'barrido-nocturno', 'foros-nocturno');
+ where jobname in ('barrido-mediodia', 'barrido-nocturno',
+                   'licitaciones-nocturno', 'foros-nocturno');
 
 -- 12:00 Chile — el único diurno, lo tienen todos los planes.
 select cron.schedule(
@@ -191,6 +192,15 @@ select cron.schedule(
 select cron.schedule(
   'barrido-nocturno', '0 * * * *',
   $cron$ select motor.disparar_si_toca('descarga-nocturna.yml', 1) $cron$
+);
+
+-- 03:00 Chile — barrido de Licitaciones: los 30 días de la ventana más los
+-- días de publicación de lo que sigue abierto. Va entre los otros dos y no
+-- compite con ellos: es otro portal (la API oficial, con su propio ticket) y la
+-- cuenta es de repositorio público, así que los minutos de Actions son gratis.
+select cron.schedule(
+  'licitaciones-nocturno', '0 * * * *',
+  $cron$ select motor.disparar_si_toca('licitaciones-nocturno.yml', 3) $cron$
 );
 
 -- 05:00 Chile — después del nocturno de Compra Ágil.
@@ -221,7 +231,7 @@ select cron.schedule(
 --    order by d.start_time desc limit 20;
 --
 -- SI HAY QUE APAGARLO
---   select cron.unschedule('barrido-mediodia');   -- y los otros dos
+--   select cron.unschedule('barrido-mediodia');   -- y los otros tres
 -- Los `schedule:` de los workflows siguen ahí de respaldo: los barridos volverán
 -- a salir, pero con las horas de atraso de siempre.
 -- ============================================================================

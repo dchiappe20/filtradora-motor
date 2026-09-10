@@ -41,7 +41,11 @@ MAPEO_COMPRA_AGIL = {
 # Compra Ágil es pública e idéntica para todas las empresas: se guarda UNA sola
 # copia, con empresa_id NULL, y todas la leen. Antes se duplicaba por empresa,
 # que en la ventana de 10 días con todas las cotizaciones son ~62 MB por copia.
-TABLAS_COMPARTIDAS = {"compra_agil", "clientes_seguimiento"}
+# `licitaciones` se sumó cuando dejó de llenarla la descarga a mano de cada
+# empresa y pasó a llenarla el barrido nocturno (`barrido_licitaciones.py`): los
+# datos son públicos e idénticos para todo el mundo, así que se baja UNA vez con
+# un solo ticket y la leen todas.
+TABLAS_COMPARTIDAS = {"compra_agil", "clientes_seguimiento", "licitaciones"}
 
 
 def es_compartida(nombre_tabla: str) -> bool:

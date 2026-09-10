@@ -1,0 +1,192 @@
+name: Barrido nocturno Licitaciones
+
+# Deja la tabla `licitaciones` al día sin que nadie apriete nada, igual que el
+# barrido nocturno de Compra Ágil deja `compra_agil`. La app sólo lee de la nube.
+#
+# Antes las licitaciones entraban SÓLO por la descarga a mano (ver
+# `descarga-licitaciones.yml`): alguien elegía un rango, esperaba, y ese rango
+# era el que veía toda su empresa porque la descarga REEMPLAZABA la tabla. Ese
+# botón sigue existiendo para traer un tramo antiguo, pero ahora sólo SUMA.
+#
+# QUÉ SE MIRA CADA NOCHE
+#
+#   · Los últimos 30 días del listado, para encontrar lo nuevo.
+#   · Los días de publicación de lo que sigue abierto fuera de esa ventana.
+#     Una licitación puede estar publicada dos meses —el plazo lo pone el
+#     organismo— y aquí NADA se borra por antigüedad: lo único que suelta una
+#     licitación de la tabla es que el portal la muestre con otro estado.
+#
+# EL TICKET
+#
+# Uno solo, el de Amilab, para todo el barrido. La API oficial limita POR
+# TICKET, y antes había uno por empresa justamente porque cada una descargaba
+# por su cuenta. Ahora la descarga es UNA y la copia es compartida, así que no
+# hay nada que repartir. Va como `MP_TICKET`, el valor común que usa
+# `empresa_config` cuando no hay empresa en la sesión.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# QUIÉN LO DISPARA A LA HORA
+#
+# Supabase, con pg_cron, llamando a la API de GitHub (ver
+# `supabase/cron_barridos.sql`). El cron de aquí abajo es RESPALDO: las corridas
+# programadas de GitHub llevan meses saliendo entre 2 y 12 horas tarde.
+# ─────────────────────────────────────────────────────────────────────────────
+on:
+  schedule:
+    # RESPALDO. 07:11 UTC ≈ 03:11 (invierno) / 04:11 (verano) en Chile. Va
+    # después del nocturno de Compra Ágil (01:00) y antes de los foros (05:00),
+    # aunque no compiten: son portales distintos y la cuenta es de repo público,
+    # con minutos de Actions gratis.
+    - cron: '11 7 * * *'
+  # A mano desde "Actions" -> "Run workflow", y camino del disparo puntual.
+  workflow_dispatch: {}
+
+permissions:
+  # Sólo se clona el código: el token del job no necesita escribir en el repo.
+  contents: read
+  # Para preguntarle a la API si el disparo puntual ya hizo el barrido de esta
+  # noche, y no repetirlo desde el respaldo.
+  actions: read
+
+jobs:
+  barrer:
+    runs-on: ubuntu-latest
+    # GitHub mata cualquier trabajo a las 6 h (360 min) pase lo que pase. El
+    # corte de verdad lo pone el script (LIMITE_MINUTOS = 300 en
+    # barrido_licitaciones.py), que se detiene solo tras guardar lo que lleve;
+    # esto es sólo la red de seguridad.
+    #
+    # De régimen el barrido baja las licitaciones publicadas hoy (~150-200
+    # fichas, minutos). La PRIMERA población son miles a 3 hilos, así que no
+    # cabe en una corrida: se completa sola en dos o tres noches, porque lo
+    # descargado se guarda por lotes y la siguiente sigue donde quedó.
+    timeout-minutes: 350
+    # MISMO grupo que la descarga por rango: las dos escriben la misma tabla
+    # compartida, así que nunca deben correr a la vez. El que llegue segundo
+    # espera.
+    concurrency:
+      group: descarga-licitaciones
+      cancel-in-progress: false
+    env:
+      ARCHIVO: licitaciones-nocturno.yml
+    steps:
+      - name: ¿Hace falta este respaldo?
+        id: guardia
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CRON: ${{ github.event.schedule }}
+          EVENTO: ${{ github.event_name }}
+        run: |
+          set -uo pipefail
+
+          if [ "$EVENTO" != "schedule" ]; then
+            echo "Disparo directo: se corre el barrido."
+            echo "corre=si" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # El instante que le TOCABA a esta corrida, reconstruido desde el cron
+          # que la disparó. No se mira el reloj: una corrida puede llegar horas
+          # tarde y aun así se sabe de qué noche es.
+          utc_m=$(echo "$CRON" | awk '{print $1}')
+          utc_h=$(echo "$CRON" | awk '{print $2}')
+          prog=$(date -u -d "$(date -u +%F) ${utc_h}:${utc_m}" +%s)
+          ahora=$(date -u +%s)
+          if [ "$prog" -gt "$ahora" ]; then
+            prog=$(date -u -d "$(date -u -d yesterday +%F) ${utc_h}:${utc_m}" +%s)
+          fi
+          atraso=$(( (ahora - prog) / 60 ))
+          nominal=$(date -u -d "@$prog" +%Y-%m-%dT%H:%M:%SZ)
+          echo "Le tocaba a las $nominal; arrancó $atraso min tarde."
+
+          # ¿Ya hizo el disparo puntual de Supabase el barrido de esta noche?
+          #
+          # LA VENTANA EMPIEZA 2 h ANTES DE LA HORA NOMINAL DEL CRON, por lo
+          # mismo que en los otros tres workflows: el disparo puntual sale a la
+          # hora EN PUNTO de Chile y este cron va a un minuto suelto más tarde,
+          # así que buscando desde el instante exacto no lo encontraría nunca y
+          # el respaldo repetiría el barrido entero cada noche.
+          desde=$(date -u -d "@$((prog - 7200))" +%Y-%m-%dT%H:%M:%SZ)
+          # Una corrida FALLIDA no cuenta como cubierta: si el disparo puntual se
+          # cayó, este respaldo tiene que hacer el trabajo. Las que aún están
+          # corriendo (conclusion null) sí cuentan, o el respaldo se pondría en
+          # cola detrás sólo para repetir lo mismo.
+          ya=$(curl -sS --max-time 30 \
+                 -H "Authorization: Bearer $GH_TOKEN" \
+                 -H "Accept: application/vnd.github+json" \
+                 "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/$ARCHIVO/runs?event=workflow_dispatch&created=%3E$desde&per_page=30" \
+               | jq '[.workflow_runs[]
+                      | select(.conclusion != "failure" and .conclusion != "cancelled")]
+                     | length')
+          # Ante la duda se CORRE: perder una noche entera es mucho peor que
+          # repetirla, sobre todo durante la primera población.
+          if ! echo "$ya" | grep -qE '^[0-9]+$'; then
+            echo "No se pudo preguntar a la API si ya corrió: por si acaso, se corre."
+            ya=0
+          fi
+
+          if [ "$ya" -gt 0 ]; then
+            echo "Desde $desde ya hubo $ya corrida(s) por disparo puntual: este respaldo no hace falta."
+            echo "corre=no" >> "$GITHUB_OUTPUT"
+          else
+            echo "Nadie hizo el barrido de esta noche: lo hace este respaldo."
+            echo "corre=si" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Clonar repositorio
+        if: steps.guardia.outputs.corre == 'si'
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        if: steps.guardia.outputs.corre == 'si'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar dependencias (solo lo que usa el runner)
+        if: steps.guardia.outputs.corre == 'si'
+        run: pip install -r requirements.txt
+
+      - name: Ejecutar barrido nocturno
+        if: steps.guardia.outputs.corre == 'si'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          # service_role: el runner recorre las empresas de `core` para avisarles
+          # del avance y escribe la copia compartida (empresa_id NULL), que desde
+          # la app está cerrada a escritura.
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          # UN solo ticket para todo el barrido: la copia es compartida.
+          MP_TICKET: ${{ secrets.MP_TICKET_AMILAB }}
+          # El runner corre en UTC; sin esto, «hoy» sería el día siguiente
+          # durante toda la madrugada chilena y la ventana quedaría corrida.
+          TZ: America/Santiago
+        run: python barrido_licitaciones.py
+
+      # Red de seguridad: si el job muere (timeout, cancelación, fallo del
+      # runner), la app se quedaría esperando en "corriendo" hasta agotar su
+      # propio plazo. Va con `curl` a propósito, no con el código del repo:
+      # tiene que funcionar aunque lo que fallara fuese el checkout o el pip.
+      #
+      # El filtro `estado=eq.corriendo` evita pisar un final bueno, y aquí se
+      # aplica a TODAS las empresas (no hay EMPRESA_ID: la descarga es una sola
+      # y su estado se escribió para todas).
+      - name: Avisar a las apps si la corrida terminó a medias
+        if: always() && steps.guardia.outputs.corre == 'si'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          if [ "$JOB_STATUS" = "success" ]; then exit 0; fi
+          detalle="El barrido terminó en el servidor sin completarse ($JOB_STATUS). Revisa el log de la corrida."
+          cuerpo=$(jq -nc \
+            --arg detalle "$detalle" \
+            --arg ahora "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{estado: "error", detalle: $detalle, actualizado: $ahora}')
+          curl -sS -X PATCH \
+            "$SUPABASE_URL/rest/v1/descarga_estado?modulo=eq.licitaciones&estado=eq.corriendo" \
+            -H "apikey: $SUPABASE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_KEY" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            -d "$cuerpo"
