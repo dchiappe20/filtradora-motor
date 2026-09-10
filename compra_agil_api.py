@@ -8,6 +8,7 @@ import time
 import os
 
 import datos_nube
+import historial_clientes
 
 API_URL = "https://api.buscador.mercadopublico.cl/compra-agil"
 
@@ -517,7 +518,7 @@ def _codigos_ausentes(df_unicos, dias_podables, vistos, codigos_descargar):
 
 
 def _procesar_pagina_listado(payload, vistos, llamado_por_codigo, codigos_descargar,
-                             codigos_cerrados=None):
+                             codigos_cerrados=None, estados_vistos=None):
     """Recorre una página del listado y anota qué fichas hay que bajar.
 
     Se toman las cotizaciones ABIERTAS ('Publicada'), en 1er y en 2do llamado:
@@ -540,14 +541,21 @@ def _procesar_pagina_listado(payload, vistos, llamado_por_codigo, codigos_descar
             continue
         vistos.add(codigo)
 
-        if str(item.get("estado", "")).strip().lower() != ESTADO_ABIERTA:
+        estado = str(item.get("estado", "")).strip().lower()
+        if estado != ESTADO_ABIERTA:
             if codigos_cerrados is not None:
                 codigos_cerrados.add(codigo)
+            # El estado de verdad, con el nombre que le pone el portal. Es el
+            # único sitio donde se sabe: en cuanto la cotización sale de lo
+            # publicado deja de aparecer en el listado (`status=2`) y ya no hay
+            # a quién preguntarle si cerró, se adjudicó o quedó desierta.
+            if estados_vistos is not None and estado:
+                estados_vistos[codigo] = estado
             continue
 
-        estado = _LLAMADO_TEXTOS.get(item.get("estado_convocatoria"), "")
+        llamado = _LLAMADO_TEXTOS.get(item.get("estado_convocatoria"), "")
         cacheado = llamado_por_codigo.get(codigo)
-        if cacheado is None or (estado and cacheado != estado):
+        if cacheado is None or (llamado and cacheado != llamado):
             codigos_descargar.append(codigo)
 
 
@@ -777,6 +785,10 @@ def gestionar_descarga_ultimas(callback_estado=None, cancel_event=None,
     codigos_descargar = []
     vistos = set()
     codigos_cerrados = set()   # ya no admiten cotización: se sueltan del caché
+    # {código: estado} para las que el listado sí dijo a qué pasaron ('cerrada',
+    # 'adjudicada', 'desierta'…). Es lo que se guarda en el historial del cliente
+    # en vez de suponer; ver `historial_clientes.ESTADO_POR_DEFECTO`.
+    estados_vistos = {}
     dias_fallidos = []
     dias_ok = []               # listados enteros y sin fallos
     paginas_perdidas = 0       # páginas que no contestaron ni tras el rescate
@@ -809,7 +821,8 @@ def gestionar_descarga_ultimas(callback_estado=None, cancel_event=None,
 
         def _al_llegar(payload, dia_str=dia_str, idx_dia=idx_dia):
             _procesar_pagina_listado(payload, vistos, llamado_por_codigo,
-                                     codigos_descargar, codigos_cerrados)
+                                     codigos_descargar, codigos_cerrados,
+                                     estados_vistos)
             _avisar(f"Revisando cotizaciones... día {dia_str} "
                     f"({idx_dia}/{len(dias)}) ({len(codigos_descargar)} por descargar)",
                     0, _publico_listado())
@@ -850,6 +863,20 @@ def gestionar_descarga_ultimas(callback_estado=None, cancel_event=None,
     a_soltar = _codigos_fuera_de_ventana(df_cache, date_from) | codigos_cerrados
     a_soltar |= _codigos_segundo_cierre_vencido(unicos, pd.Timestamp.now())
     a_soltar |= _codigos_ausentes(unicos, set(dias_ok[1:]), vistos, codigos_descargar)
+
+    # Antes de soltarlas, las de un comprador que alguien sigue se copian a su
+    # historial. Es la última vez que se tienen esos datos: en cuanto salgan de
+    # `compra_agil` no hay de dónde volver a sacarlos, porque el listado se pide
+    # con `status=2` y el portal ya no las devuelve.
+    #
+    # Va aquí y no dentro de `sincronizar_tabla` a propósito: esa función es
+    # genérica y no tiene por qué saber qué es un cliente favorito. Aquí sí se
+    # sabe, y además se tiene `estados_vistos`, que es lo único que dice a qué
+    # estado pasó cada una en vez de suponerlo.
+    if a_soltar:
+        historial_clientes.archivar(df_cache, a_soltar,
+                                    historial_clientes.TIPO_COMPRA_AGIL,
+                                    estados=estados_vistos)
 
     if total == 0:
         # «Sin novedades» sólo se puede decir si de verdad se pudo mirar. Con

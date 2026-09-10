@@ -6,6 +6,7 @@ import time
 import os
 
 import datos_nube
+import historial_clientes
 from empresa_config import ticket_mercado_publico
 
 URL_API = "https://api.mercadopublico.cl/servicios/v1/publico/licitaciones.json"
@@ -258,6 +259,48 @@ def descargar_un_dia(fecha_str_ddmmyyyy, codigos_cacheados, callback_estado=None
 
     return pd.DataFrame(filas_para_tabla), True
  
+def _archivar_lo_que_se_va(df_nuevas):
+    """Guarda el historial de los clientes seguidos antes de reemplazar la tabla.
+
+    `licitaciones` no se sincroniza fila a fila: se REEMPLAZA entera, así que
+    todo lo que no venga en `df_nuevas` desaparece sin dejar rastro. Para quien
+    sigue a un comprador eso era perder su historial en cada descarga.
+
+    Se lee la tabla actual antes de pisarla porque es la última vez que esos
+    datos existen. Sólo se lee si hay alguien a quien seguir: sin clientes
+    seguidos no hay nada que guardar y no se gasta la lectura.
+
+    El estado se deduce de la fecha de cierre y no se da por cerrado sin más
+    (`estado_defecto=None`): salir de esta tabla significa «no venía en el rango
+    descargado», no «cerró». Ver `historial_clientes.ESTADO_DESCONOCIDO`.
+
+    Nunca lanza: si el historial falla, la descarga tiene que seguir igual.
+    """
+    try:
+        ruts = historial_clientes.ruts_seguidos()
+        if not ruts:
+            return
+
+        actuales = datos_nube.leer_tabla(TABLA_NUBE)
+        if actuales is None or actuales.empty:
+            return
+        if "Numero Adquisición" not in actuales.columns:
+            return
+
+        siguen = set()
+        if df_nuevas is not None and not df_nuevas.empty                 and "Numero Adquisición" in df_nuevas.columns:
+            siguen = set(df_nuevas["Numero Adquisición"].astype(str))
+
+        se_van = set(actuales["Numero Adquisición"].astype(str)) - siguen
+        if se_van:
+            historial_clientes.archivar(
+                actuales, se_van, historial_clientes.TIPO_LICITACION,
+                ruts=ruts, estado_defecto=None)
+    except Exception as e:
+        print(f"[clientes] no se pudo archivar el historial de licitaciones "
+              f"({e}); la descarga sigue", flush=True)
+
+
 def gestionar_descarga_rango(fecha_inicio_str, fecha_fin_str, callback_estado=None):
     fechas_solicitadas = get_fechas_rango(fecha_inicio_str, fecha_fin_str)
     # Cada descarga REEMPLAZA el caché: el Excel resultante contiene SOLO el rango
@@ -290,11 +333,13 @@ def gestionar_descarga_rango(fecha_inicio_str, fecha_fin_str, callback_estado=No
     ]
     if not df_final.empty:
         df_final = df_final.drop_duplicates(subset=["Numero Adquisición", "Descripción Producto"])
+        _archivar_lo_que_se_va(df_final)
         datos_nube.reemplazar_tabla(TABLA_NUBE, df_final)
     elif hubo_exito:
         # Rango consultado OK pero sin licitaciones publicadas: la tabla queda vacía
         # (no se conservan descargas anteriores). Si TODO falló, no se toca la tabla
         # para no perder datos por un error transitorio del servidor.
+        _archivar_lo_que_se_va(None)
         datos_nube.reemplazar_tabla(TABLA_NUBE, pd.DataFrame(columns=columnas_completas))
             
     if os.path.exists("meta_api.json"):
