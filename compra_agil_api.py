@@ -403,6 +403,28 @@ def _obtener_ficha(codigo):
     return None
 
 
+def _texto_cantidad(valor):
+    """La cantidad como texto, venga como venga. -> '' si no hay.
+
+    Antes se guardaba el número tal cual y el texto lo decidía pandas al armar
+    el lote: si entre las fichas de un lote había una cantidad con decimales,
+    TODA la columna pasaba a float y un 5 se guardaba «5.0»; sin ese vecino,
+    «5». La misma cotización quedaba distinta según con quién compartiera lote.
+
+    Además, la función de Supabase que trae lo nuevo cada 5 minutos
+    (`compra-agil-reciente`) escribe en la misma tabla y tiene que dejar
+    exactamente lo mismo que este Python; eso sólo es posible con una regla que
+    no dependa del lote. Ver pruebas/contrato_fichas.test.ts.
+    """
+    if valor is None:
+        return ""
+    if isinstance(valor, bool):
+        return str(valor)
+    if isinstance(valor, float) and valor.is_integer():
+        return str(int(valor))
+    return str(valor)
+
+
 def _procesar_ficha(ficha):
     codigo = ficha.get("codigo", "")
     nombre = ficha.get("nombre", "")
@@ -435,7 +457,7 @@ def _procesar_ficha(ficha):
             "Fecha Cierre 1er Llamado": f_cierre1,
             "Fecha Cierre 2do Llamado": f_cierre2,
             "Llamado": llamado,
-            "Cantidad": prod.get("cantidad", ""),
+            "Cantidad": _texto_cantidad(prod.get("cantidad", "")),
             "Descripción Producto": desc_final,
             # Sólo el nombre del producto: lo demás que llevaba el antiguo
             # «Texto Filtrado» ya son columnas y el filtrado las recorre todas.

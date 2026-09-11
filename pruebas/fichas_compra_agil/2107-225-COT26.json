@@ -1,0 +1,80 @@
+{
+ "success": "OK",
+ "trace": null,
+ "payload": {
+  "detalle_id": 5786454,
+  "codigo": "2107-225-COT26",
+  "nombre": "INSUMOS LABORATORIO CLINICO",
+  "descripcion": "insumos unidad laboratorio clinico, solicitados por jefe de laboratorio mediante correo electronico del 03.09.26",
+  "fecha_publicacion": "2026-09-08 19:19",
+  "fecha_cierre": "2026-09-11 19:18",
+  "id_estado": 2,
+  "estado": "Publicada",
+  "direccion_entrega": "AV. ERRAZURIZ 921",
+  "plazo_entrega": 2,
+  "presupuesto_estimado": 1000000,
+  "moneda": "CLP",
+  "motivo_cancelacion": null,
+  "fecha_cancelacion": null,
+  "multa_sancion": 1,
+  "cantidad_proveedores_invitados": 0,
+  "productos_solicitados": [
+   {
+    "codigo_producto": 41116105,
+    "nombre": "Reactivos o soluciones químicos",
+    "descripcion": "MAGNESIO COBAS C501/C311 250 DET",
+    "cantidad": 2,
+    "unidad_medida": "KIT"
+   },
+   {
+    "codigo_producto": 41116105,
+    "nombre": "Reactivos o soluciones químicos",
+    "descripcion": "CALIBRADOR CS TROPONINA I COBAS E411",
+    "cantidad": 1,
+    "unidad_medida": "KIT"
+   },
+   {
+    "codigo_producto": 41116105,
+    "nombre": "Reactivos o soluciones químicos",
+    "descripcion": "INSULINA CALSET(calibrador) Cobas E411",
+    "cantidad": 1,
+    "unidad_medida": "KIT"
+   },
+   {
+    "codigo_producto": 41116105,
+    "nombre": "Reactivos o soluciones químicos",
+    "descripcion": "FT4 CALSET (Calibrador) Cobas E411",
+    "cantidad": 1,
+    "unidad_medida": "KIT"
+   },
+   {
+    "codigo_producto": 41116105,
+    "nombre": "Reactivos o soluciones químicos",
+    "descripcion": "CKMB COBAS C501/C311 100 DET",
+    "cantidad": 5,
+    "unidad_medida": "KIT"
+   }
+  ],
+  "proveedores_cotizando": [],
+  "informacion_institucion": {
+   "organismo_comprador": "SERVICIO DE SALUD HOSPITAL DE SANTA CRUZ",
+   "rut_organismo_comprador": "61.602.148-6",
+   "division": "Hospital de Santa Cruz"
+  },
+  "id_orden_compra": null,
+  "fecha_cierre_primer_llamado": "2026-09-09 20:00",
+  "fecha_cierre_segundo_llamado": "2026-09-11 19:18",
+  "tipo_presupuesto": "Estimado",
+  "estado_convocatoria": 2,
+  "motivo_seleccion": null,
+  "criterio_seleccion": null,
+  "total_demandas": 0,
+  "total_ofertas_recibidas": 1,
+  "motivo_desierta": null,
+  "considera_requisitos_medioambientales": false,
+  "considera_requisitos_impacto_social_economico": false,
+  "ordenEmitida": [],
+  "ordenCompraOculta": false
+ },
+ "errores": null
+}

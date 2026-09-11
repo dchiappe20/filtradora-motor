@@ -1,0 +1,52 @@
+{
+ "success": "OK",
+ "trace": null,
+ "payload": {
+  "detalle_id": 5797824,
+  "codigo": "2776-724-COT26",
+  "nombre": "S.P. N°175503, SECPLAN. COMPRA DE 03 SILLAS PARA REPOSICIÓN, SEGÚN LO ESTABLECIDO EN LOS TERMINOS DE REQUERIMIENTO ADJUNTOS",
+  "descripcion": "S.P. N°175503, SECPLAN. COMPRA DE 03 SILLAS PARA REPOSICIÓN, SEGÚN LO ESTABLECIDO EN LOS TERMINOS DE REQUERIMIENTO ADJUNTOS",
+  "fecha_publicacion": "2026-09-11 14:39",
+  "fecha_cierre": "2026-09-14 11:30",
+  "id_estado": 2,
+  "estado": "Publicada",
+  "direccion_entrega": "AVDA. BISQUERTT N°262, RENGO",
+  "plazo_entrega": 2,
+  "presupuesto_estimado": 500000,
+  "moneda": "CLP",
+  "motivo_cancelacion": null,
+  "fecha_cancelacion": null,
+  "multa_sancion": 1,
+  "cantidad_proveedores_invitados": 0,
+  "productos_solicitados": [
+   {
+    "codigo_producto": 56121504,
+    "nombre": "Sillas universitarias",
+    "descripcion": "SILLAS, SEGÚN LO ESTABLECIDO EN LOS TERMINOS DE REQUERIMIENTO ADJUNTOS",
+    "cantidad": 3,
+    "unidad_medida": "EA"
+   }
+  ],
+  "proveedores_cotizando": [],
+  "informacion_institucion": {
+   "organismo_comprador": "I MUNICIPALIDAD DE RENGO",
+   "rut_organismo_comprador": "69.081.200-2",
+   "division": "ADQUISICION MUNICIPAL"
+  },
+  "id_orden_compra": null,
+  "fecha_cierre_primer_llamado": "2026-09-14 11:30",
+  "fecha_cierre_segundo_llamado": "2026-09-17 08:20",
+  "tipo_presupuesto": "Disponible",
+  "estado_convocatoria": 1,
+  "motivo_seleccion": null,
+  "criterio_seleccion": null,
+  "total_demandas": 0,
+  "total_ofertas_recibidas": 0,
+  "motivo_desierta": null,
+  "considera_requisitos_medioambientales": false,
+  "considera_requisitos_impacto_social_economico": false,
+  "ordenEmitida": [],
+  "ordenCompraOculta": false
+ },
+ "errores": null
+}

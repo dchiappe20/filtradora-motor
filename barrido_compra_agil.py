@@ -2,6 +2,14 @@
 """
 barrido_compra_agil.py — Barrido automático de Compra Ágil (headless, GitHub Actions).
 
+DESDE EL 2026-09-11 ESTE BARRIDO YA NO FILTRA NI HACE SEGUIMIENTO. Los filtros se
+aplican siempre en la app (al entrar al módulo y al pulsar «Actualizar»), y lo
+recién publicado lo trae cada 5 minutos la función de Supabase
+`compra-agil-reciente`. Aquí queda la DESCARGA: el completo de la madrugada, que
+repasa los 30 días y es el único que detecta cierres y pasos a 2do llamado, y el
+del día mientras convive con la función. Lo que sigue sobre filtrado,
+seguimiento y ranuras por plan describe cómo era antes.
+
 Es el ÚNICO camino por el que entran datos de Compra Ágil: la app ya no descarga
 nada, sólo lee de la nube. Corre en cuatro RANURAS al día, todas programadas:
 
@@ -55,7 +63,6 @@ from datetime import datetime
 import auth
 import compra_agil_api
 import datos_nube
-import seguimiento_compra_agil
 
 _MODULO = "compra_agil"
 
@@ -64,15 +71,6 @@ _MODULO = "compra_agil"
 # suba `timeout-minutes`, así que el corte va con margen para que el propio
 # script decida cuándo parar, en vez de que lo maten a mitad de un lote.
 LIMITE_MINUTOS = {"completo": 300, "dia": 100}
-
-# Minutos reservados para el SEGUIMIENTO, después de la descarga. Van aparte a
-# propósito: el 2026-08-19 la descarga del día se llevó sus 100 minutos y el job
-# murió a los 120 en mitad del seguimiento, sin terminar ninguna empresa. El
-# reparto tiene que estar escrito, no ser lo que sobre.
-#
-# El `timeout-minutes` del workflow tiene que ser MAYOR que la suma de los dos
-# más el arranque (checkout + pip ≈ 3 min), o GitHub corta igual.
-MINUTOS_SEGUIMIENTO = {"completo": 0, "dia": 55}
 
 # EL NOCTURNO NO SE REPARTE. Es de todos, esté en el plan que esté: recorre los
 # 30 días de la ventana y es el único que vuelve sobre los días viejos, así que
@@ -120,15 +118,11 @@ RANURAS_VALIDAS = ("noche", "manana", "mediodia", "tarde", "todas")
 RANURAS_OMITIBLES = ()
 
 # Cuánto del total pesa cada fase, para que la barra de la app avance MONÓTONA.
-# Una que vuelve a cero tres veces no informa: desconcierta.
-#
-# Los tramos salen de lo que dura cada cosa de verdad. En el barrido del día la
-# descarga tiene 100 minutos de presupuesto y el seguimiento 55, y el filtrado
-# son un par de minutos por empresa; en el nocturno no hay seguimiento, así que
-# su tramo se lo reparten las otras dos.
+# Desde el 2026-09-11 hay una sola fase: el barrido ya no filtra ni hace
+# seguimiento (los filtros se aplican en la app), así que la descarga es todo.
 PESOS = {
-    "completo": {"descarga": (0, 85), "filtrado": (85, 100), "seguimiento": (100, 100)},
-    "dia":      {"descarga": (0, 60), "filtrado": (60, 80),  "seguimiento": (80, 100)},
+    "completo": {"descarga": (0, 100)},
+    "dia":      {"descarga": (0, 100)},
 }
 
 # A quién se le cuenta el avance, en qué fase va y qué es lo último que se le
@@ -276,145 +270,6 @@ def _avisar_a_todas(empresas, estado, detalle):
         print(f"  (no se pudo avisar a todas: {escritas} de {len(ids)})", flush=True)
 
 
-def _filtrar_y_seguir(empresas, modo):
-    """Filtra la copia compartida para cada empresa y, en los barridos del día,
-    revisa además el estado de lo que ya venía siguiendo. -> texto de resumen.
-
-    Va después de la descarga y nunca tumba el barrido: los datos crudos ya
-    están guardados, así que un fallo aquí es "las apps ven lo de antes", no
-    "se perdió la corrida". Cada empresa se aísla de las demás por lo mismo.
-
-    La copia cruda se lee UNA vez y se pasa a todas: es la misma para todo el
-    mundo y son ~15 MB, así que leerla por empresa multiplicaría el egress sin
-    traer un solo dato nuevo.
-    """
-    from helpers import id_corto
-
-    # Sin nadie a quien filtrar no hay por qué bajarse los ~15 MB de la copia
-    # compartida. Pasa cuando la ranura no le toca a ninguna empresa y aun asi
-    # la descarga se hizo, que es lo correcto: de ella comen las demas rondas.
-    if not empresas:
-        print("  Ninguna empresa toca en esta ranura: no hay nada que filtrar.", flush=True)
-        return ""
-
-    # El anuncio va ANTES de leer la copia compartida: son ~15 MB y ese rato la
-    # barra se quedaría con el último mensaje de la descarga.
-    _fijar_fase("filtrado")
-    _publicar("corriendo", "Filtrando cotizaciones...", _progreso_global(0), forzar=True)
-
-    try:
-        df_crudo = datos_nube.leer_tabla(compra_agil_api.TABLA_NUBE)
-    except Exception as e:
-        print(f"  ERROR al leer la copia compartida para filtrar: {e}", flush=True)
-        return ""
-
-    if df_crudo is None or df_crudo.empty:
-        print("  No hay datos de Compra Ágil que filtrar todavía.", flush=True)
-        return ""
-
-    # El motor de filtrado espera texto en todas las columnas, como hacía la app
-    # antes de llamarlo. Sin esto, un NaN acabaría comparándose como "nan".
-    df_crudo = df_crudo.fillna("")
-    for col in df_crudo.columns:
-        df_crudo[col] = df_crudo[col].astype(str)
-
-    escribir = lambda m: print(m, flush=True)
-    total_cotizaciones = 0
-    total_cambios = 0
-    total_pendientes = 0
-    con_error = 0
-
-    # --- FASE 1: filtrar TODAS -----------------------------------------------
-    # Va primero y sin reloj porque es lo esencial y lo barato: sin filtrar, la
-    # app no ve las cotizaciones nuevas. Son ~1-2 minutos por empresa.
-    print(f"Filtrando para {len(empresas)} empresa(s)...", flush=True)
-    for indice, (empresa_id, nombre) in enumerate(empresas):
-        # El avance de esta fase es cuántas empresas van, no cuánto lleva cada
-        # una: `filtrar_para_empresa` es una sola pasada y no informa por dentro.
-        #
-        # El texto NO nombra a la empresa que toca. La fila de estado se escribe
-        # igual para todas —la descarga es una copia compartida— así que poner
-        # ahí el nombre le enseñaba a cada cliente los de los demás.
-        _publicar("corriendo", "Filtrando cotizaciones...",
-                  _progreso_global(100 * indice / max(len(empresas), 1)),
-                  forzar=True)
-        try:
-            res = seguimiento_compra_agil.filtrar_para_empresa(
-                empresa_id, nombre, df_crudo=df_crudo,
-                # La descarga COMPLETA de la madrugada recorre los 30 días, así
-                # que su copia cruda manda y el seguimiento parte limpio. La del
-                # DÍA sólo lista lo de hoy: ahí la cruda está vieja para todo lo
-                # demás y no puede pisar lo que el seguimiento confirmó.
-                preservar_estado=(modo == "dia"),
-                log=escribir)
-            total_cotizaciones += res.get("cotizaciones", 0)
-        except Exception as e:
-            con_error += 1
-            print(f"  ERROR al filtrar para {nombre} ({id_corto(empresa_id)}): {e}",
-                  flush=True)
-            # Una empresa rota no puede dejar sin barrido a las demás.
-
-    # --- FASE 2: seguir el estado, con lo que quede de tiempo -----------------
-    # Sólo en los barridos del día: el completo de la madrugada acaba de releer
-    # la ventana entera, así que el estado de la tabla es de hace un momento.
-    if modo != "dia":
-        return f"Seguimiento: {total_cotizaciones} cotizaciones filtradas."
-
-    presupuesto = MINUTOS_SEGUIMIENTO.get(modo, 0) * 60
-    if presupuesto <= 0:
-        return f"Seguimiento: {total_cotizaciones} cotizaciones filtradas."
-
-    # El tiempo se reparte por igual. Con el orden por `ultima_revision` que usa
-    # `seguimiento_vigentes`, cada corrida ataca lo más rezagado de cada empresa,
-    # así que lo que hoy no cabe entra mañana: nada se queda sin revisar nunca.
-    fin = time.monotonic() + presupuesto
-    print(f"Revisando el estado de lo seguido ({MINUTOS_SEGUIMIENTO[modo]} min "
-          f"para {len(empresas)} empresa(s))...", flush=True)
-
-    _fijar_fase("seguimiento")
-    for i, (empresa_id, nombre) in enumerate(empresas):
-        # Mismo motivo que en el filtrado: el nombre de la empresa que toca no
-        # puede acabar en la pantalla de las otras.
-        _publicar("corriendo", "Confirmando el estado de tus cotizaciones...",
-                  _progreso_global(100 * i / max(len(empresas), 1)),
-                  forzar=True)
-        restantes = len(empresas) - i
-        corte = min(fin, time.monotonic() + (fin - time.monotonic()) / restantes)
-        if time.monotonic() >= fin:
-            print(f"  Sin tiempo para {nombre} ({id_corto(empresa_id)}); "
-                  "le toca en la próxima corrida.", flush=True)
-            continue
-        def _avisar_seguimiento(revisadas, total, i=i):
-            """La fila de estado tiene que seguir latiendo durante toda la fase.
-
-            El avance mezcla las dos cosas que avanzan: por qué empresa va y por
-            dónde va dentro de ella. El texto no nombra a ninguna: la fila es la
-            misma para todas y ahí no puede salir el nombre de otra empresa.
-            """
-            dentro = (revisadas / total) if total else 1
-            _publicar("corriendo", "Confirmando el estado de tus cotizaciones...",
-                      _progreso_global(100 * (i + dentro) / max(len(empresas), 1)))
-
-        try:
-            res_seg = seguimiento_compra_agil.revisar_estado(
-                empresa_id, nombre, corte=corte, log=escribir,
-                avisar=_avisar_seguimiento)
-            total_cambios += res_seg.get("cambios", 0)
-            total_pendientes += res_seg.get("pendientes", 0)
-        except Exception as e:
-            con_error += 1
-            print(f"  ERROR al revisar el estado de {nombre} "
-                  f"({id_corto(empresa_id)}): {e}", flush=True)
-
-    partes = [f"{total_cotizaciones} cotizaciones filtradas",
-              f"{total_cambios} con cambio de estado"]
-    if total_pendientes:
-        partes.append(f"{total_pendientes} sin revisar (siguen en la próxima)")
-    if con_error:
-        partes.append(f"{con_error} empresa(s) con error (ver el log)")
-    return "Seguimiento: " + ", ".join(partes) + "."
-
-
 def main():
     modo = (sys.argv[1] if len(sys.argv) > 1 else "completo").strip().lower()
     if modo not in LIMITE_MINUTOS:
@@ -465,11 +320,11 @@ def main():
 
     if modo == "completo":
         print(f"Barrido COMPLETO de Compra Ágil (últimos {compra_agil_api.DIAS_VENTANA} "
-              f"días) — copia compartida; se filtra para {len(empresas)} de "
+              f"días) — copia compartida; se avisa a {len(empresas)} de "
               f"{len(todas)} empresa(s).", flush=True)
     else:
         print(f"Barrido DEL DÍA de Compra Ágil (sólo lo publicado hoy), ranura "
-              f"'{ranura}' — copia compartida; se filtra para {len(empresas)} de "
+              f"'{ranura}' — copia compartida; se avisa a {len(empresas)} de "
               f"{len(todas)} empresa(s).", flush=True)
 
     # A partir de aquí `_log` sabe a quién contarle el avance y en qué fase va.
@@ -503,22 +358,8 @@ def main():
     # primera página, salió «Sin novedades» y el job terminó bien— y desde fuera
     # era indistinguible de un día tranquilo.
     if dias_fallidos and not descargadas:
-        # Que se caiga el LISTADO no dice nada sobre lo demás: las fichas son
-        # otro endpoint del portal, y el filtrado no lo toca en absoluto (lee de
-        # la nube). Así que se intenta igual antes de rendirse.
-        #
-        # Importa de verdad: el 2026-08-20 a las 10:00 el listado no respondió y
-        # la corrida se cortó aquí, de modo que ese día nadie revisó el estado de
-        # las cotizaciones ya seguidas hasta las 15:00. El portal estaba caído
-        # para listar, pero las fichas se servían igual.
-        print("El listado no respondió, pero el filtrado y el seguimiento no "
-              "dependen de él: se intentan igual.", flush=True)
-        resumen_seg = _filtrar_y_seguir(empresas, modo)
-
         detalle = (f"{etiqueta} fallido: el portal no respondió al listar "
                    f"{len(dias_fallidos)} día(s) y no se bajó nada.")
-        if resumen_seg:
-            detalle = f"{detalle} {resumen_seg}"
         _avisar_a_todas(empresas, "error", detalle)
         print(f"ERROR: {detalle}", flush=True)
         # Sigue siendo un fallo: no traer lo nuevo del día es no hacer el
@@ -545,10 +386,9 @@ def main():
     else:
         detalle = f"{etiqueta} completado."
 
-    # Con los datos ya en la nube, cada empresa se lleva su parte.
-    resumen_seg = _filtrar_y_seguir(empresas, modo)
-    if resumen_seg:
-        detalle = f"{detalle} {resumen_seg}"
+    # Aquí se filtraba para cada empresa y se revisaba el estado de lo seguido.
+    # Ya no (2026-09-11): los filtros se aplican en la app, sobre esta misma
+    # copia compartida.
 
     # 'listo' y no 'error': lo descargado ya está en la nube y es utilizable.
     _avisar_a_todas(empresas, "listo", detalle)

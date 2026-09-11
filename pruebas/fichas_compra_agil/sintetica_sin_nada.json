@@ -1,0 +1,15 @@
+{
+ "success": "OK",
+ "payload": {
+  "nombre": null,
+  "descripcion": null,
+  "informacion_institucion": {
+   "organismo_comprador": null
+  },
+  "fecha_publicacion": null,
+  "fecha_cierre_primer_llamado": "",
+  "fecha_cierre": null,
+  "estado_convocatoria": "1",
+  "productos_solicitados": null
+ }
+}

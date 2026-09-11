@@ -1,0 +1,13 @@
+# Sólo para publicar las funciones de este repo con la CLI de Supabase. No lleva
+# ningún secreto: la clave de servicio la inyecta Supabase y la del cron vive en
+# el Vault de la base (ver sql_compra_agil_reciente.sql, en el repo de la app).
+project_id = "filtradora-motor"
+
+[functions.compra-agil-reciente]
+# La llama pg_cron sin JWT. La función exige en cambio la cabecera
+# `x-cron-secreto` y la compara contra la base: ver index.ts.
+verify_jwt = false
+
+[functions.licitaciones-reciente]
+# La llama pg_cron sin JWT; exige `x-cron-secreto` y la compara contra la base.
+verify_jwt = false

@@ -1,0 +1,290 @@
+{
+ "success": "OK",
+ "trace": null,
+ "payload": {
+  "detalle_id": 5797721,
+  "codigo": "3821-279-COT26",
+  "nombre": "Adquisición Juegos Terapéuticos para Centro de salud",
+  "descripcion": "Casa De Muñecas Clásica De Madera Muebles 17 Piezas Armables, con zona de juegos abierta para un fácil acceso a todos los 2 niveles de la casa de muñecas. Incluye muebles en madera y personajes.  \nCortex Kids, juego de mesa de desafíos cognitivos infantiles, con pruebas de memoria, observación, análisis, coordinación y percepción. equivalente Asmodee. Rory's Story Cubes, set de 9 dados con imágenes para creación de historias y narrativas. equivalente Asmodee adj. cot. y detalle de productos\n\n",
+  "fecha_publicacion": "2026-09-11 14:38",
+  "fecha_cierre": "2026-09-14 08:00",
+  "id_estado": 2,
+  "estado": "Publicada",
+  "direccion_entrega": "Lautaro N°720, Santa María, San Felipe",
+  "plazo_entrega": 3,
+  "presupuesto_estimado": 375000,
+  "moneda": "CLP",
+  "motivo_cancelacion": null,
+  "fecha_cancelacion": null,
+  "multa_sancion": 0,
+  "cantidad_proveedores_invitados": 0,
+  "productos_solicitados": [
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Casa De Muñecas Clásica De Madera Muebles 17 Piezas Armables, con zona de juegos abierta para un fácil acceso a todos los 2 niveles de la casa de muñecas. Incluye muebles en madera y personajes. adjuntar cotizacion y detalle de los productos.  \n\n\n",
+    "cantidad": 2,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Cortex Kids, juego de mesa de desafíos cognitivos infantiles, con pruebas de memoria, observación, análisis, coordinación y percepción. equivalente Asmodee. adjuntar cotizacion y detalle de los productos.  \n\n",
+    "cantidad": 1,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Rory's Story Cubes, set de 9 dados con imágenes para creación de historias y narrativas. equivalente Asmodee. adjuntar cotizacion y detalle de los productos.  ",
+    "cantidad": 1,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Juego Ping Pong Pubertad Teraideas, set de 90 cartas educativas para niños y niñas desde los 9 años, orientado a facilitar la conversación y educación sobre pubertad, cambios corporales, emociones, autoestima, relaciones interpersonales, presión social, autocuidado y límites. adjuntar cotizacion y detalle de los productos.   \n",
+    "cantidad": 2,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": " Pintura con Diamantes para Niños, diseños aleatorios.adjuntar cotizacion y detalle de los productos.   \n",
+    "cantidad": 6,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Juego de memorice, compuesto por tarjetas o fichas resistentes de cartón laminado, madera o material equivalente, con ilustraciones en pares. Set de 24 a 40 pares de tarjetas.",
+    "cantidad": 5,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Block para colorear Flores de Estación, equivalente Artel, 12 ilustraciones, Papel acuarela 200 gms. adjuntar cotizacion y detalle de los productos.  \n \n",
+    "cantidad": 3,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Block para colorear Magia Tropical, equivalente Artel, 15 ilustraciones prepicadas. Papel dúplex 250 gms. adjuntar cotizacion y detalle de los productos.  ",
+    "cantidad": 3,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Block para colorear Silvestrel, equivalente Artel, 15 ilustraciones prepicadas. Papel dúplex 250 gms. adjuntar cotizacion y detalle de los productos.  ",
+    "cantidad": 3,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Block para colorear Aventuras salvajes, equivalente Artel, 15 ilustraciones prepicadas. Papel dúplex 250 gms. adjuntar cotizacion y detalle de los productos.  ",
+    "cantidad": 3,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Teatro magnético de madera con 8 personajes para contar cuentos clásicos,  , de Cartón, Papel, Imán y Madera Medidas. adjuntar cotizacion y detalle de los productos.  \n",
+    "cantidad": 1,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Libro para Colorear Bobbie Goods Osito 50 Páginas Tapa Dura. adjuntar cotizacion y detalle de los productos.  ",
+    "cantidad": 5,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Libro infantil de actividades “Arte Antiestrés para Colorear: Descubre a los Mejores Amigos”, Disney, editorial Hachette Bienestar. Libro de 80 páginas, formato físico de tapa blanda. adjuntar cotizacion y detalle de los productos.  ",
+    "cantidad": 3,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Libro Para Colorear Mandalas, Art&Craft, tapa blanda, 48 páginas. adjuntar cotizacion y detalle de los productos.  \n  \n",
+    "cantidad": 5,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Set de mostacillas mixtas de distintas letras. adjuntar cotizacion y detalle de los productos.  ",
+    "cantidad": 1,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "IQ Puzzle Game - Juego De Lógica Con 120 Desafíos, de plástico. adjuntar cotizacion y detalle de los productos.  \n\n",
+    "cantidad": 3,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Dobble, juego de cartas de observación y velocidad, mínimo 2 jugadores, 55 cartas, para desarrollar atención, percepción y habilidades sociales. equivalente Asmodee. adjuntar cotizacion y detalle de los productos.  ",
+    "cantidad": 1,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "¿Adivina Quién?, juego de mesa para 2 jugadores, con personajes y preguntas de respuesta sí/no. equivalente Hasbro Gaming. adjuntar cotizacion y detalle de los productos.  ",
+    "cantidad": 1,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "UNO clásico, juego de cartas, 112 cartas, para 2–10 jugadores. Marca aleatoria. adjuntar cotizacion y detalle de los productos.  ",
+    "cantidad": 3,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Juego de Life, versión clásica/familiar, tablero con ruleta, autos, peones, tarjetas y dinero. Para 2–4 jugadores equivalente Hasbro. adjuntar cotizacion y detalle de los productos.  ",
+    "cantidad": 1,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Jenga clásico, juego de habilidad y equilibrio compuesto por bloques de madera. adjuntar cotizacion y detalle de los productos.  ",
+    "cantidad": 1,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Pictionary, juego de dibujo y adivinanzas para desarrollar comunicación, creatividad y expresión. equivalente Mattel. adjuntar cotizacion y detalle de los productos.  ",
+    "cantidad": 1,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Cubo sensorial tipo Pop It Spinner, fabricado en plástico resistente, que combina superficies de presión tipo Pop It con mecanismo giratorio. Color aleatorio. adjuntar cotizacion y detalle de los productos.  ",
+    "cantidad": 20,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Juguete sensorial tipo gusano u oruga articulada, fabricado en plástico resistente y flexible, compuesto por segmentos móviles que permiten doblar, girar y manipular el objeto con las manos. adjuntar cotizacion y detalle de los productos.  ",
+    "cantidad": 20,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Teclado sensorial tipo Pop It, fabricado en silicona flexible y material resistente, con múltiples botones o cavidades de presión que permiten realizar movimientos repetitivos con los dedos, con luces. adjuntar cotizacion y detalle de los productos.  ",
+    "cantidad": 20,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Cubo infinito sensorial tipo Fidget, fabricado en plástico ABS resistente y de buena calidad, compuesto por módulos articulados que permiten plegar, girar, abrir y transformar el cubo de manera repetitiva . adjuntar cotizacion y detalle de los productos.  ",
+    "cantidad": 20,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Juguete sensorial tipo Squishy/antiestrés, fabricado en espuma de memoria, silicona viscoelástica, goma flexible o material equivalente, de textura suave, flexible y agradable al tacto, que permita apretar, comprimir, deformar y manipular repetidamente.  adjuntar cotizacion y detalle de los productos.  ",
+    "cantidad": 20,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Pelota sensorial texturada, fabricada en goma flexible, silicona o material equivalente, de superficie con relieves y diferentes texturas que permitan la estimulación táctil y manipulación manual. Apta para apretar, presionar, rodar y manipular. adjuntar cotizacion y detalle de los productos.  ",
+    "cantidad": 20,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "caja organizadora de plástico, con tapa de cierre seguro y asa para facilitar su transporte. color neutro o transparente. 3 litros, medidas 25cm 11.5cm -17cm . adjuntar cotizacion y detalle de los productos.  ",
+    "cantidad": 10,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Masilla tipo foamy moldeable, material flexible y maleable, de textura suave, liviana y fácil de manipular, apta para modelar diferentes figuras.  Presentación en set de 6 a 12 colores, en envases individuales con tapa.  Cada porción: aproximadamente 20–30 g. adjuntar cotizacion y detalle de los productos.  ",
+    "cantidad": 20,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Set de animales de granja en miniatura, fabricados en plástico, goma o PVC resistente y no tóxico, con figuras de diferentes animales tales como vaca, caballo, cerdo, oveja, gallina, pato, perro y gato, entre otros.  Set de 10 a 15 figuras. adjuntar cotizacion y detalle de los productos.  ",
+    "cantidad": 5,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Set de bloques de construcción tipo Lego, tamaño mediano, fabricados en plástico ABS resistente y no tóxico, con piezas de diferentes formas y colores. Set de aproximadamente 100 a 150 piezas, con piezas de 2 a 6 cm aproximadamente. adjuntar cotizacion y detalle de los productos.  ",
+    "cantidad": 3,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Rompecabezas fabricado en cartón grueso laminado, madera. Entre 20 y 50 piezas. Diseños infantiles aleatorios. adjuntar cotizacion y detalle de los productos.  ",
+    "cantidad": 5,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Set de 6 a 8 títeres de mano, confeccionados en tela, fieltro, felpa u otro material textil resistente, suave y lavable, con personajes variados.   adjuntar cotizacion y detalle de los productos.  ",
+    "cantidad": 5,
+    "unidad_medida": "EA"
+   },
+   {
+    "codigo_producto": 42251503,
+    "nombre": "Juegos terapéuticos",
+    "descripcion": "Juego de cocinita infantil para juego simbólico, fabricado en plástico resistente, madera o material equivalente, con diseño seguro y bordes redondeados. Debe incluir ollas, sartenes, tazas, tetera, platos, cubiertos, entre otros. adjuntar cotizacion y detalle de los productos.   ",
+    "cantidad": 5,
+    "unidad_medida": "EA"
+   }
+  ],
+  "proveedores_cotizando": [],
+  "informacion_institucion": {
+   "organismo_comprador": "I MUNICIPALIDAD DE SANTA MARIA",
+   "rut_organismo_comprador": "69.051.000-6",
+   "division": "Departamento De Salud Municipal"
+  },
+  "id_orden_compra": null,
+  "fecha_cierre_primer_llamado": "2026-09-14 08:00",
+  "fecha_cierre_segundo_llamado": "2026-09-17 01:21",
+  "tipo_presupuesto": "Estimado",
+  "estado_convocatoria": 1,
+  "motivo_seleccion": null,
+  "criterio_seleccion": null,
+  "total_demandas": 0,
+  "total_ofertas_recibidas": 0,
+  "motivo_desierta": null,
+  "considera_requisitos_medioambientales": false,
+  "considera_requisitos_impacto_social_economico": false,
+  "ordenEmitida": [],
+  "ordenCompraOculta": false
+ },
+ "errores": null
+}

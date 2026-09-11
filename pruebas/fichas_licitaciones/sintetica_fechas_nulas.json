@@ -1,0 +1,30 @@
+{
+ "codigo": "9999-1-LE26",
+ "fecha": "2026-09-11",
+ "respuesta": {
+  "Cantidad": 1,
+  "Version": "v1",
+  "Listado": [
+   {
+    "CodigoExterno": "9999-1-LE26",
+    "Nombre": "Licitaci\u00f3n de prueba",
+    "CodigoEstado": 5,
+    "Comprador": {
+     "NombreOrganismo": "Hospital de Prueba",
+     "RutUnidad": "61.606.606-4"
+    },
+    "Fechas": null,
+    "Items": {
+     "Cantidad": 1,
+     "Listado": [
+      {
+       "NombreProducto": "Guantes",
+       "Descripcion": "Guantes de nitrilo talla M",
+       "Cantidad": 100
+      }
+     ]
+    }
+   }
+  ]
+ }
+}
