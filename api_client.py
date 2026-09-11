@@ -330,7 +330,13 @@ def _dias_del_barrido(unicos, date_from, date_to):
 
     extras = set()
     if unicos is not None and not unicos.empty and "Fecha Publicación" in unicos.columns:
-        f_pub = pd.to_datetime(unicos["Fecha Publicación"], errors="coerce")
+        # ISO8601 a propósito: la API manda la hora con 0 a 3 decimales, y la
+        # inferencia por defecto deja sin fecha las filas que no calzan con la
+        # primera. Aquí eso no era cosmético: una licitación sin fecha no daba
+        # día que vigilar, así que pasados los 30 días nadie volvía a mirar
+        # su estado y se quedaba en la tabla para siempre.
+        f_pub = pd.to_datetime(unicos["Fecha Publicación"], errors="coerce",
+                               format="ISO8601")
         for fecha in pd.unique(f_pub.dropna().dt.date):
             if fecha < date_from or fecha > date_to:
                 extras.add(fecha)
