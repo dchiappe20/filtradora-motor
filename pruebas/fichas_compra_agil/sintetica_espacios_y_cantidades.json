@@ -1,0 +1,44 @@
+{
+ "success": "OK",
+ "payload": {
+  "codigo": "9999-3-COT26",
+  "nombre": "Prueba: espacios raros, _x000D_ y cantidades de todo tipo",
+  "descripcion": "",
+  "informacion_institucion": {
+   "organismo_comprador": "Hospital de Prueba",
+   "rut_organismo_comprador": 61606606
+  },
+  "fecha_publicacion": "2026-09-11 12:00",
+  "fecha_cierre": "2026-09-15 15:00",
+  "fecha_cierre_primer_llamado": "2026-09-12 15:00",
+  "fecha_cierre_segundo_llamado": "2026-09-15 15:00",
+  "estado_convocatoria": 2,
+  "productos_solicitados": [
+   {
+    "nombre": "\t Guantes de nitrilo\u00a0",
+    "descripcion": "\u001c Talla M_x000D_ \u2003",
+    "cantidad": 2.5
+   },
+   {
+    "nombre": "Jab\u00f3n",
+    "descripcion": "",
+    "cantidad": 3.0
+   },
+   {
+    "nombre": "Alcohol gel",
+    "descripcion": "Botella 1 L",
+    "cantidad": "12"
+   },
+   {
+    "nombre": "Toallas",
+    "descripcion": "Papel\ufeff",
+    "cantidad": true
+   },
+   {
+    "nombre": "Cloro",
+    "descripcion": "Bid\u00f3n 5 L",
+    "cantidad": 100
+   }
+  ]
+ }
+}

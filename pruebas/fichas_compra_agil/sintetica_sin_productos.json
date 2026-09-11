@@ -1,0 +1,13 @@
+{
+ "success": "OK",
+ "payload": {
+  "codigo": "9999-2-COT26",
+  "nombre": "Prueba: sin productos, instituci\u00f3n nula y sin primer cierre",
+  "descripcion": "  Servicio de aseo_x000D_ mensual  ",
+  "informacion_institucion": null,
+  "fecha_publicacion": "2026-09-11 11:00",
+  "fecha_cierre": "2026-09-13 18:00",
+  "fecha_cierre_segundo_llamado": "",
+  "productos_solicitados": []
+ }
+}

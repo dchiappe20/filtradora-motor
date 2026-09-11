@@ -1,0 +1,73 @@
+name: Contrato de fichas (Python = TypeScript)
+
+# De día escribe la función de Supabase `compra-agil-reciente` (TypeScript) y de
+# noche el barrido del motor (Python), en la MISMA tabla. Esta prueba pasa las
+# mismas fichas por los dos y exige el mismo resultado, carácter a carácter: si
+# alguien cambia un lado sin el otro, se pone roja.
+#
+# Es un uso normal de Actions —probar el software de este repositorio—, a
+# diferencia de los barridos.
+on:
+  push:
+    paths:
+      - 'compra_agil_api.py'
+      - 'api_client.py'
+      - 'datos_nube.py'
+      - 'supabase/functions/compra-agil-reciente/**'
+      - 'supabase/functions/licitaciones-reciente/**'
+      - 'supabase/functions/_shared/**'
+      - 'pruebas/**'
+      - '.github/workflows/contrato-compra-agil.yml'
+  pull_request:
+    paths:
+      - 'compra_agil_api.py'
+      - 'api_client.py'
+      - 'datos_nube.py'
+      - 'supabase/functions/compra-agil-reciente/**'
+      - 'supabase/functions/licitaciones-reciente/**'
+      - 'supabase/functions/_shared/**'
+      - 'pruebas/**'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  contrato:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar dependencias del motor
+        run: pip install -r requirements.txt
+
+      # Node 24 ejecuta TypeScript sin compilar (quita los tipos al vuelo).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: ¿buscador.ts sigue generado desde el Python?
+        run: |
+          python pruebas/generar_buscador_ts.py
+          git diff --exit-code supabase/functions/compra-agil-reciente/buscador.ts
+
+      - name: Filas del Python
+        run: python pruebas/filas_python.py > "$RUNNER_TEMP/esperado.json"
+
+      - name: Filas de la función, comparadas
+        env:
+          ESPERADO: ${{ runner.temp }}/esperado.json
+        run: node --test pruebas/contrato_fichas.test.ts
+
+      - name: Licitaciones — respuestas del Python
+        run: python pruebas/filas_python_licitaciones.py > "$RUNNER_TEMP/esperado_licitaciones.json"
+
+      - name: Licitaciones — respuestas de la función, comparadas
+        env:
+          ESPERADO_LICITACIONES: ${{ runner.temp }}/esperado_licitaciones.json
+        run: node --test pruebas/contrato_licitaciones.test.ts

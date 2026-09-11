@@ -1,0 +1,34 @@
+{
+ "success": "OK",
+ "payload": {
+  "codigo": "9999-1-COT26",
+  "nombre": "Prueba: productos con valores nulos",
+  "descripcion": "Descripci\u00f3n general",
+  "informacion_institucion": {
+   "organismo_comprador": "Municipalidad de Prueba",
+   "rut_organismo_comprador": "69.000.000-0"
+  },
+  "fecha_publicacion": "2026-09-11 10:00",
+  "fecha_cierre": "2026-09-12 10:00",
+  "fecha_cierre_primer_llamado": "2026-09-12 10:00",
+  "fecha_cierre_segundo_llamado": null,
+  "estado_convocatoria": 1,
+  "productos_solicitados": [
+   {
+    "nombre": null,
+    "descripcion": null,
+    "cantidad": null
+   },
+   {
+    "nombre": "Guantes",
+    "descripcion": null,
+    "cantidad": 5
+   },
+   {
+    "nombre": null,
+    "descripcion": "Mascarillas",
+    "cantidad": 3
+   }
+  ]
+ }
+}

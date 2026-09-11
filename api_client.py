@@ -136,8 +136,96 @@ def comprador_de(codigo):
             comprador.get("NombreOrganismo", ""), "")
 
 
-def procesar_licitacion(codigo, fecha_exacta_str):
+def _texto_cantidad(valor):
+    """La cantidad como texto, venga como venga. -> '' si no hay.
+
+    La misma regla que `compra_agil_api._texto_cantidad`, y por lo mismo: antes
+    el texto lo decidía pandas al armar el lote (un 5 salía «5.0» si otra ficha
+    del lote traía decimales), y la función de Supabase `licitaciones-reciente`
+    tiene que escribir exactamente lo mismo que este Python.
+    """
+    if valor is None:
+        return ""
+    if isinstance(valor, bool):
+        return str(valor)
+    if isinstance(valor, float) and valor.is_integer():
+        return str(int(valor))
+    return str(valor)
+
+
+def _filas_de_respuesta(datos, codigo, fecha_exacta_str):
+    """Qué dice UNA respuesta de la API sobre una licitación. -> (filas, estado)
+
+      'REINTENTAR'  el portal contestó con un «Mensaje» y sin datos: saturado.
+      'VACIO'       no hay detalle de esa licitación.
+      'OTRA_FECHA'  el listado del día también trae licitaciones publicadas
+                    otro día; ésas no se guardan.
+      'OK'          las filas.
+
+    Va aparte de la consulta para que la función de Supabase
+    `licitaciones-reciente` pueda imitarlo y la prueba de contrato comparar los
+    dos (pruebas/contrato_licitaciones.test.ts). Si se toca esto, se toca aquella.
+    """
     filas = []
+    if "Mensaje" in datos and not datos.get("Listado"):
+        return filas, "REINTENTAR"
+
+    detalles = datos.get("Listado", [])
+    if not detalles:
+        return filas, "VACIO"
+
+    detalle = detalles[0]
+    fechas = detalle.get("Fechas", {})
+
+    f_pub = str(fechas.get("FechaPublicacion", ""))
+    if not f_pub.startswith(fecha_exacta_str):
+        return filas, "OTRA_FECHA"
+
+    info_comprador = detalle.get("Comprador", {}) or {}
+    comprador = info_comprador.get("NombreOrganismo", "Desconocido")
+    # `RutUnidad` es el RUT del organismo comprador. Se guarda para poder decir
+    # de quién es cada licitación sin comparar nombres, que vienen con
+    # mayúsculas, tildes y espacios a su antojo (lo usa el módulo de clientes).
+    rut_comprador = info_comprador.get("RutUnidad", "")
+    f_cierre = fechas.get("FechaCierre", "")
+
+    items_data = detalle.get("Items")
+    if isinstance(items_data, dict):
+        lista_items = items_data.get("Listado")
+        if isinstance(lista_items, dict):
+            lista_items = [lista_items]
+        elif not lista_items:
+            lista_items = []
+
+        _vacios = {"", "sin descripcion", "sin descripción", "n/a", "none"}
+        for item in lista_items:
+            desc_real = str(item.get('Descripcion', '')).strip().replace("_x000D_", "")
+            nombre_generico = str(item.get('NombreProducto', '')).strip().replace("_x000D_", "")
+
+            if desc_real and desc_real.lower() not in _vacios:
+                desc_final = desc_real
+            else:
+                desc_final = nombre_generico
+
+            # Campo solo para filtrado: NombreProducto + Descripcion concatenados
+            partes_filtro = [p for p in (nombre_generico, desc_real) if p and p.lower() not in _vacios]
+            texto_filtrado = " ".join(partes_filtro)
+
+            filas.append({
+                "Numero Adquisición": codigo,
+                "Nombre Adquisición": detalle.get("Nombre", ""),
+                "Organismo": comprador,
+                "RUT Organismo": rut_comprador,
+                "Fecha Publicación": f_pub,
+                "Fecha Cierre": f_cierre,
+                "Cantidad": _texto_cantidad(item.get("Cantidad", 0)),
+                "Descripción Producto": desc_final,
+                "Texto Filtrado": texto_filtrado,
+            })
+    return filas, "OK"
+
+
+def procesar_licitacion(codigo, fecha_exacta_str):
     # Backoff exponencial y varios reintentos: la API oficial limita fuerte por
     # ticket ("demasiadas consultas"), sobre todo con varias peticiones a la vez.
     # Se midió que con esperas crecientes y 3 hilos NO se pierden licitaciones.
@@ -148,76 +236,26 @@ def procesar_licitacion(codigo, fecha_exacta_str):
                                 params={"codigo": codigo, "ticket": ticket_mercado_publico()},
                                 timeout=15)
             if resp.status_code == 200:
-                datos = resp.json()
-                if "Mensaje" in datos and not datos.get("Listado"):
+                filas, estado = _filas_de_respuesta(resp.json(), codigo, fecha_exacta_str)
+                if estado == "REINTENTAR":
                     time.sleep(espera)
                     espera = min(espera * 2, 20)
                     continue
-                    
-                detalles = datos.get("Listado", [])
-                if not detalles: return filas, "VACIO"
-                    
-                detalle = detalles[0]
-                fechas = detalle.get("Fechas", {})
-                
-                f_pub = str(fechas.get("FechaPublicacion", ""))
-                if not f_pub.startswith(fecha_exacta_str):
-                    return filas, "OTRA_FECHA"
-                
-                info_comprador = detalle.get("Comprador", {}) or {}
-                comprador = info_comprador.get("NombreOrganismo", "Desconocido")
-                # `RutUnidad` es el RUT del organismo comprador. Se guarda para
-                # poder decir de quién es cada licitación sin comparar nombres,
-                # que vienen con mayúsculas, tildes y espacios a su antojo (lo
-                # usa el módulo de clientes seguidos).
-                rut_comprador = info_comprador.get("RutUnidad", "")
-                f_cierre = fechas.get("FechaCierre", "")
-                
-                items_data = detalle.get("Items")
-                if isinstance(items_data, dict):
-                    lista_items = items_data.get("Listado")
-                    if isinstance(lista_items, dict): lista_items = [lista_items] 
-                    elif not lista_items: lista_items = []
-                        
-                    _vacios = {"", "sin descripcion", "sin descripción", "n/a", "none"}
-                    for item in lista_items:
-                        desc_real = str(item.get('Descripcion', '')).strip().replace("_x000D_", "")
-                        nombre_generico = str(item.get('NombreProducto', '')).strip().replace("_x000D_", "")
+                return filas, estado
 
-                        if desc_real and desc_real.lower() not in _vacios:
-                            desc_final = desc_real
-                        else:
-                            desc_final = nombre_generico
-
-                        # Campo solo para filtrado: NombreProducto + Descripcion concatenados
-                        partes_filtro = [p for p in (nombre_generico, desc_real) if p and p.lower() not in _vacios]
-                        texto_filtrado = " ".join(partes_filtro)
-
-                        filas.append({
-                            "Numero Adquisición": codigo,
-                            "Nombre Adquisición": detalle.get("Nombre", ""),
-                            "Organismo": comprador,
-                            "RUT Organismo": rut_comprador,
-                            "Fecha Publicación": f_pub,
-                            "Fecha Cierre": f_cierre,
-                            "Cantidad": item.get("Cantidad", 0),
-                            "Descripción Producto": desc_final,
-                            "Texto Filtrado": texto_filtrado,
-                        })
-                return filas, "OK"
-                
             elif resp.status_code in [429, 500, 502, 503, 504]:
                 time.sleep(espera)
                 espera = min(espera * 2, 20)
             else:
-                return filas, "ERROR_API"
-                
+                return [], "ERROR_API"
+
         except Exception:
             time.sleep(espera)
             espera = min(espera * 2, 20)
 
-    return filas, "FALLO_TIMEOUT"
- 
+    return [], "FALLO_TIMEOUT"
+
+
 def fecha_iso_de(fecha_str_ddmmyyyy):
     """'05-08-2026' -> '2026-08-05'. La forma en que el portal fecha las fichas."""
     d = fecha_str_ddmmyyyy.replace("-", "")

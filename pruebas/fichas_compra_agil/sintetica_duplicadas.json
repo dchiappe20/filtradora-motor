@@ -1,0 +1,37 @@
+{
+ "success": "OK",
+ "payload": {
+  "codigo": "9999-4-COT26",
+  "nombre": "Prueba: productos que se repiten",
+  "descripcion": "No deber\u00eda usarse: hay productos",
+  "informacion_institucion": {
+   "organismo_comprador": "Servicio de Prueba",
+   "rut_organismo_comprador": "61.000.000-1"
+  },
+  "fecha_publicacion": "2026-09-11 13:00",
+  "fecha_cierre_primer_llamado": "2026-09-12 13:00",
+  "estado_convocatoria": 1,
+  "productos_solicitados": [
+   {
+    "nombre": "A",
+    "descripcion": "Papel",
+    "cantidad": 1
+   },
+   {
+    "nombre": "B",
+    "descripcion": "Papel",
+    "cantidad": 2
+   },
+   {
+    "nombre": "Papel",
+    "descripcion": "",
+    "cantidad": 4
+   },
+   {
+    "nombre": "C",
+    "descripcion": "  papel ",
+    "cantidad": 1
+   }
+  ]
+ }
+}

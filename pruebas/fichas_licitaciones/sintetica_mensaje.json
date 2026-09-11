@@ -1,0 +1,8 @@
+{
+ "codigo": "9999-1-LE26",
+ "fecha": "2026-09-11",
+ "respuesta": {
+  "Codigo": 203,
+  "Mensaje": "Lo sentimos. Hemos detectado que existen peticiones simult\u00e1neas."
+ }
+}
