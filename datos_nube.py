@@ -11,6 +11,7 @@ para que el resto del código siga trabajando con los encabezados de siempre.
 import os
 import re
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
@@ -133,6 +134,59 @@ def _exec(construir_consulta):
     reconstruye en cada intento para no reutilizar un builder ya consumido.
     """
     return ejecutar_con_refresco(construir_consulta)
+
+
+# Cuánto se espera entre intentos cuando una LECTURA falla por algo pasajero.
+# Cuatro intentos y ~43 s en total: lo bastante para pasar un corte de la
+# puerta de entrada de Supabase o una primera consulta en frío, y poco al lado
+# de un barrido que dura minutos.
+_ESPERAS_LECTURA = (3, 10, 30)
+
+# Lo que dice «inténtalo otra vez en un rato» y no «esto está mal».
+#
+# Los códigos numéricos sólo llegan así cuando la respuesta NO era un error de
+# PostgREST: postgrest-py, si no puede leer el cuerpo como JSON, pone el estado
+# HTTP en `code` («JSON could not be generated», code 504). Un error de verdad
+# —una columna que no existe, un permiso— trae su código de Postgres (42703,
+# 42501...) y no se reintenta: repetirlo daría lo mismo.
+_CODIGOS_PASAJEROS = {"500", "502", "503", "504", "520", "522", "524", "PGRST003"}
+_SENALES_PASAJERAS = ("timeout", "timed out", "connecterror", "readerror",
+                      "remoteprotocolerror", "connection reset", "connection aborted",
+                      "server disconnected", "temporarily unavailable")
+
+
+def _es_pasajero(error) -> bool:
+    """¿Es un fallo que se arregla solo esperando?"""
+    if str(getattr(error, "code", "") or "") in _CODIGOS_PASAJEROS:
+        return True
+    texto = f"{type(error).__name__} {error}".lower()
+    return any(senal in texto for senal in _SENALES_PASAJERAS)
+
+
+def leer_con_reintentos(construir_consulta):
+    """Como `_exec`, pero reintenta con esperas crecientes si falla por algo pasajero.
+
+    SÓLO PARA LECTURAS. Repetir una lectura es siempre seguro; repetir una
+    escritura no: un insert que recibió un 504 pudo guardarse igual en la base,
+    y volver a mandarlo duplicaría filas. Por eso las escrituras siguen con
+    `_exec`.
+
+    Por qué existe: el 2026-09-14 el barrido nocturno de licitaciones murió
+    entero porque Supabase contestó 504 a la PRIMERA página de la tabla —justo
+    después de haber respondido bien a la consulta de empresas—. Las llamadas a
+    Mercado Público ya reintentaban así; las lecturas a nuestra propia base no,
+    y un tropiezo de seis segundos se llevaba la noche.
+    """
+    for espera in _ESPERAS_LECTURA:
+        try:
+            return _exec(construir_consulta)
+        except Exception as e:
+            if not _es_pasajero(e):
+                raise
+            print(f"[nube] una lectura falló por algo pasajero ({str(e)[:160]}); "
+                  f"se reintenta en {espera} s.", flush=True)
+            time.sleep(espera)
+    return _exec(construir_consulta)
 
 
 def _verificar_cliente():
@@ -290,7 +344,7 @@ def leer_tabla(nombre_tabla: str, desde: str = None) -> pd.DataFrame:
                     q = q.gt("actualizado", desde)
                 return q.order("id").range(offset, offset + _TAM_PAGINA_SELECT - 1).execute()
 
-            resp = _exec(_consulta)
+            resp = leer_con_reintentos(_consulta)
             datos = resp.data or []
             filas.extend(datos)
             if len(datos) < _TAM_PAGINA_SELECT:
@@ -320,7 +374,7 @@ def marca_mas_reciente(nombre_tabla: str):
         return None
     try:
         empresa_id = empresa_actual() if not es_compartida(nombre_tabla) else None
-        resp = _exec(lambda: _filtro_empresa(
+        resp = leer_con_reintentos(lambda: _filtro_empresa(
             supabase.table(nombre_tabla).select("actualizado"), nombre_tabla, empresa_id)
             .order("actualizado", desc=True).limit(1).execute())
         datos = resp.data or []
@@ -351,7 +405,7 @@ def codigos_vivos(nombre_tabla: str, columna_codigo: str = "numero_adquisicion")
                     nombre_tabla, empresa_id).order("id").range(
                         offset, offset + _TAM_PAGINA_SELECT - 1).execute()
 
-            datos = _exec(_consulta).data or []
+            datos = leer_con_reintentos(_consulta).data or []
             codigos.update(str(f[columna_codigo]) for f in datos)
             if len(datos) < _TAM_PAGINA_SELECT:
                 return codigos
@@ -397,7 +451,7 @@ def estado_seguimiento_previo() -> dict:
                         .eq("empresa_id", empresa_id).order("id")
                         .range(offset, offset + _TAM_PAGINA_SELECT - 1).execute())
 
-            datos = _exec(_consulta).data or []
+            datos = leer_con_reintentos(_consulta).data or []
             for fila in datos:
                 codigo = str(fila.get("numero_adquisicion") or "")
                 if codigo and codigo not in previo:
@@ -479,7 +533,7 @@ def seguimiento_vigentes() -> list:
                         .range(offset, offset + _TAM_PAGINA_SELECT - 1)
                         .execute())
 
-            datos = _exec(_consulta).data or []
+            datos = leer_con_reintentos(_consulta).data or []
             for fila in datos:
                 codigo = str(fila.get("numero_adquisicion") or "")
                 if codigo and codigo not in porc:
@@ -570,7 +624,7 @@ def seguimiento_de_clientes(ruts) -> pd.DataFrame:
                             .order("id")
                             .range(offset, offset + _TAM_PAGINA_SELECT - 1).execute())
 
-                datos = _exec(_consulta).data or []
+                datos = leer_con_reintentos(_consulta).data or []
                 filas.extend(datos)
                 if len(datos) < _TAM_PAGINA_SELECT:
                     break
@@ -649,7 +703,7 @@ def leer_indice_licitaciones() -> dict:
                         .order("numero_adquisicion")
                         .range(offset, offset + _TAM_PAGINA_SELECT - 1).execute())
 
-            datos = _exec(_consulta).data or []
+            datos = leer_con_reintentos(_consulta).data or []
             for fila in datos:
                 codigo = str(fila.get("numero_adquisicion") or "")
                 if codigo:
@@ -804,7 +858,7 @@ def leer_rango_descarga(modulo: str):
     if supabase is None:
         return None
     try:
-        resp = _exec(lambda: supabase.table("descarga_estado")
+        resp = leer_con_reintentos(lambda: supabase.table("descarga_estado")
                      .select("rango_desde, rango_hasta, detalle")
                      .eq("empresa_id", empresa_actual()).eq("modulo", modulo)
                      .limit(1).execute())
@@ -852,7 +906,7 @@ def cancelacion_solicitada(modulo: str) -> bool:
     if supabase is None:
         return False
     try:
-        resp = _exec(lambda: supabase.table("descarga_estado").select("cancelar")
+        resp = leer_con_reintentos(lambda: supabase.table("descarga_estado").select("cancelar")
                      .eq("empresa_id", empresa_actual()).eq("modulo", modulo).limit(1).execute())
         return bool(resp.data and resp.data[0].get("cancelar"))
     except Exception:
@@ -865,7 +919,7 @@ def leer_estado_descarga(modulo: str):
     if supabase is None:
         return None
     try:
-        resp = _exec(lambda: supabase.table("descarga_estado").select("*")
+        resp = leer_con_reintentos(lambda: supabase.table("descarga_estado").select("*")
                      .eq("empresa_id", empresa_actual())
                      .eq("modulo", modulo).limit(1).execute())
         return resp.data[0] if resp.data else None
@@ -881,7 +935,7 @@ def leer_estados_descarga():
     if supabase is None:
         return None
     try:
-        resp = _exec(lambda: supabase.table("descarga_estado").select("*")
+        resp = leer_con_reintentos(lambda: supabase.table("descarga_estado").select("*")
                      .eq("empresa_id", empresa_actual()).execute())
         return {r["modulo"]: r for r in (resp.data or []) if r.get("modulo")}
     except Exception:
@@ -974,7 +1028,7 @@ def leer_ofertadas() -> list:
     _verificar_cliente()
     empresa_id = empresa_actual()
     try:
-        resp = _exec(lambda: supabase.table("foro_ofertadas")
+        resp = leer_con_reintentos(lambda: supabase.table("foro_ofertadas")
                      .select("codigo, fecha_alta, ultima_revision")
                      .eq("empresa_id", empresa_id)
                      .order("fecha_alta", desc=True).execute())
@@ -1019,7 +1073,7 @@ def revisiones_manuales_hoy():
         return None
     try:
         hoy = datetime.now(timezone.utc).date().isoformat()
-        resp = _exec(lambda: supabase.table("foro_revisiones")
+        resp = leer_con_reintentos(lambda: supabase.table("foro_revisiones")
                      .select("id", count="exact")
                      .eq("empresa_id", empresa_actual())
                      .eq("fecha", hoy)
@@ -1061,7 +1115,7 @@ def hay_datos(nombre_tabla: str) -> bool:
         return False
     try:
         empresa_id = empresa_actual() if not es_compartida(nombre_tabla) else None
-        resp = _exec(lambda: _filtro_empresa(
+        resp = leer_con_reintentos(lambda: _filtro_empresa(
             supabase.table(nombre_tabla).select("id"),
             nombre_tabla, empresa_id).limit(1).execute())
         return bool(resp.data)
@@ -1090,7 +1144,7 @@ def contar_filas(nombre_tabla: str):
         return None
     try:
         empresa_id = empresa_actual() if not es_compartida(nombre_tabla) else None
-        resp = _exec(lambda: _filtro_empresa(
+        resp = leer_con_reintentos(lambda: _filtro_empresa(
             supabase.table(nombre_tabla).select("id", count="exact"),
             nombre_tabla, empresa_id).limit(1).execute())
         return resp.count

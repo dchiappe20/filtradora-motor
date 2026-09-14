@@ -115,8 +115,11 @@ def _empresas_objetivo():
     directos). Aquí sólo se usan para saber a quién contarle el avance: la
     descarga es una y la misma para todas.
     """
-    resp = auth.supabase.schema("core").rpc(
-        "empresas_de_app", {"p_codigo_app": auth.CODIGO_APP}).execute()
+    # Es una lectura: reintenta si Supabase tropieza (ver
+    # `datos_nube.leer_con_reintentos`).
+    resp = datos_nube.leer_con_reintentos(
+        lambda: auth.supabase.schema("core").rpc(
+            "empresas_de_app", {"p_codigo_app": auth.CODIGO_APP}).execute())
     return [str(e["id"]) for e in (resp.data or []) if e.get("id")]
 
 

@@ -205,8 +205,11 @@ def _empresas_objetivo():
     `limites`. Vía función SECURITY DEFINER en core (la service_role no tiene
     grants directos).
     """
-    resp = auth.supabase.schema("core").rpc(
-        "empresas_de_app", {"p_codigo_app": auth.CODIGO_APP}).execute()
+    # Es una lectura: reintenta si Supabase tropieza (ver
+    # `datos_nube.leer_con_reintentos`).
+    resp = datos_nube.leer_con_reintentos(
+        lambda: auth.supabase.schema("core").rpc(
+            "empresas_de_app", {"p_codigo_app": auth.CODIGO_APP}).execute())
     return [e for e in (resp.data or []) if e.get("id")]
 
 
