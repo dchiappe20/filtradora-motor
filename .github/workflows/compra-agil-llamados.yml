@@ -1,0 +1,69 @@
+name: Repaso de llamados Compra Ágil (08, 11, 14 y 17 Chile)
+
+# Detecta durante el día las cotizaciones que pasan a SEGUNDO LLAMADO.
+#
+# Antes esto sólo lo veía el barrido nocturno: una cotización que reabría a las
+# 09:00 no volvía a la pantalla hasta la madrugada siguiente, y el cliente perdía
+# el día para ofertar. Ver `barrido_llamados.py` para el detalle de qué hace y
+# qué no (no mira lo de hoy, no suelta nada y no se anuncia en la app).
+#
+# Medido el 2026-09-15: los 10 días anteriores son 189 páginas de listado, lo
+# mismo que ya recorre el nocturno. Cuatro pasadas al día suman ~756 páginas,
+# un 17% sobre lo que la app ya le pide al portal.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# QUIÉN LO DISPARA A LA HORA
+#
+# Supabase, con pg_cron, llamando a la API de GitHub (ver
+# `supabase/cron_barridos.sql`), igual que los demás barridos. Aquí NO hay cron
+# de respaldo a propósito: son cuatro pasadas al día y el barrido nocturno
+# vuelve a mirar los 30 días cada madrugada, así que perder una no deja un hueco
+# permanente — y un respaldo obligaría a repetir la guardia de «¿ya corrió?»
+# cuatro veces, una por turno.
+# ─────────────────────────────────────────────────────────────────────────────
+on:
+  workflow_dispatch:
+    inputs:
+      ranura:
+        description: Turno que lo pidió (sólo para el registro)
+        required: false
+        default: manual
+
+permissions:
+  contents: read
+
+jobs:
+  repasar:
+    runs-on: ubuntu-latest
+    # Una pasada mide 12-17 min. El corte de verdad lo pone el script
+    # (LIMITE_MINUTOS = 40); esto es la red de seguridad.
+    timeout-minutes: 50
+    # MISMO grupo que los otros barridos de Compra Ágil: los tres escriben la
+    # tabla compartida y nunca deben correr a la vez. El que llegue segundo
+    # espera. (La función de cada 5 minutos no entra aquí: no toca lo de días
+    # anteriores, así que nunca escribe los mismos códigos.)
+    concurrency:
+      group: descarga-compra-agil
+      cancel-in-progress: false
+    steps:
+      - name: Clonar repositorio
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar dependencias (solo lo que usa el runner)
+        run: pip install -r requirements.txt
+
+      - name: Repasar los llamados
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          # service_role: escribe la copia compartida (empresa_id NULL), que
+          # desde la app está cerrada a escritura.
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          # El runner corre en UTC; sin esto, «hoy» sería el día siguiente
+          # durante toda la madrugada chilena y la ventana quedaría corrida.
+          TZ: America/Santiago
+        run: python barrido_llamados.py

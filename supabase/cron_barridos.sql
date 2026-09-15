@@ -180,7 +180,8 @@ end $$;
 select cron.unschedule(jobname)
   from cron.job
  where jobname in ('barrido-mediodia', 'barrido-nocturno',
-                   'licitaciones-nocturno', 'foros-nocturno');
+                   'licitaciones-nocturno', 'foros-nocturno',
+                   'llamados-08', 'llamados-11', 'llamados-14', 'llamados-17');
 
 -- 12:00 Chile — el único diurno, lo tienen todos los planes.
 select cron.schedule(
@@ -207,6 +208,39 @@ select cron.schedule(
 select cron.schedule(
   'foros-nocturno', '0 * * * *',
   $cron$ select motor.disparar_si_toca('foros-nocturno.yml', 5) $cron$
+);
+
+-- 08:00, 11:00, 14:00 y 17:00 Chile — el repaso de LLAMADOS.
+--
+-- Detecta durante el día las cotizaciones que reabren en 2do llamado; antes
+-- había que esperar a la madrugada siguiente. Recorre los 10 días anteriores
+-- (189 páginas, lo mismo que el nocturno) sin mirar lo de hoy.
+--
+-- CADA TURNO LLEVA SU PROPIA `ranura`, y no es cosmético: la red anti-duplicado
+-- de `disparar_si_toca` mira las últimas 6 HORAS para el mismo (archivo,
+-- ranura). Con la ranura vacía en los cuatro, sólo habría corrido el de las
+-- 08:00 y los otros tres se habrían dado por repetidos, en silencio.
+--
+-- El de las 08:00 es el más valioso: recoge las que reabrieron de madrugada,
+-- que el nocturno de la 01:00 no alcanza a ver.
+select cron.schedule(
+  'llamados-08', '0 * * * *',
+  $cron$ select motor.disparar_si_toca('compra-agil-llamados.yml', 8, '{"ranura":"08"}'::jsonb) $cron$
+);
+
+select cron.schedule(
+  'llamados-11', '0 * * * *',
+  $cron$ select motor.disparar_si_toca('compra-agil-llamados.yml', 11, '{"ranura":"11"}'::jsonb) $cron$
+);
+
+select cron.schedule(
+  'llamados-14', '0 * * * *',
+  $cron$ select motor.disparar_si_toca('compra-agil-llamados.yml', 14, '{"ranura":"14"}'::jsonb) $cron$
+);
+
+select cron.schedule(
+  'llamados-17', '0 * * * *',
+  $cron$ select motor.disparar_si_toca('compra-agil-llamados.yml', 17, '{"ranura":"17"}'::jsonb) $cron$
 );
 
 -- ============================================================================

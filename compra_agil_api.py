@@ -695,7 +695,8 @@ def _listar_dia(dia_str, cancel_event, al_llegar, callback_estado=None, corte=No
 
 
 def gestionar_descarga_ultimas(callback_estado=None, cancel_event=None,
-                               limite_minutos=None, incremental=False):
+                               limite_minutos=None, incremental=False,
+                               dias_atras=None, incluir_hoy=True, podar=True):
     """
     Descarga TODAS las cotizaciones de Compra Ágil publicadas en los últimos
     `DIAS_VENTANA` días, en 1er y en 2do llamado.
@@ -742,13 +743,33 @@ def gestionar_descarga_ultimas(callback_estado=None, cancel_event=None,
     El caché guarda el llamado TAL CUAL lo dice el portal. Que un primer cierre
     ya haya pasado no se anota aquí: eso lo decide la pantalla al pintar, con la
     hora de ese momento (ver `compra_agil._llamado_visible`).
+
+    LOS TRES ÚLTIMOS PARÁMETROS son para el REPASO DE LLAMADOS del día
+    (`barrido_llamados.py`, cuatro pasadas entre las 08:00 y las 17:00), que es
+    este mismo recorrido con otro alcance:
+
+      · `dias_atras`   cuántos días hacia atrás listar (por defecto, la ventana
+                       entera). El repaso usa 10: lo que reabre en 2do llamado
+                       se publicó hace uno a tres días.
+      · `incluir_hoy`  con False no se lista el día de hoy. Una cotización no
+                       puede reabrirse el mismo día en que se publicó, y hoy es
+                       el día más caro del listado (204 de 393 páginas el
+                       2026-09-15); además de hoy ya se encarga la función de
+                       cada 5 minutos.
+      · `podar`        con False no se suelta NADA de la tabla. Soltar es cosa
+                       del nocturno, que recorre la ventana entera y sabe a qué
+                       estado pasó cada una (lo necesita el historial de
+                       clientes). ⚠️ Es imprescindible con `dias_atras` corto:
+                       `_codigos_fuera_de_ventana` mide contra `date_from`, así
+                       que podar con una ventana de 10 días borraría todo lo
+                       anterior, que sigue abierto y es bueno.
     """
     # La hora es la de Chile: los runners de GitHub corren en UTC, así que los
     # workflows fijan TZ=America/Santiago. Si no, «hoy» sería el día siguiente
     # durante toda la madrugada chilena.
     ahora = datetime.now()
-    date_to = ahora.date()
-    date_from = (ahora - timedelta(days=DIAS_VENTANA)).date()
+    date_to = ahora.date() if incluir_hoy else (ahora - timedelta(days=1)).date()
+    date_from = (ahora - timedelta(days=dias_atras or DIAS_VENTANA)).date()
 
     # El corte se calcula ya, no al empezar a bajar fichas: el listado también
     # tarda —y más aún ahora que insiste con las páginas que se caen—, así que si
@@ -876,9 +897,14 @@ def gestionar_descarga_ultimas(callback_estado=None, cancel_event=None,
     # el del día sólo mira hoy y de ahí no poda nada (`dias_ok[1:]` queda vacío),
     # porque una cotización publicada al filo de la medianoche puede aparecer
     # listada en el día anterior, que no se recorrió.
-    a_soltar = _codigos_fuera_de_ventana(df_cache, date_from) | codigos_cerrados
-    a_soltar |= _codigos_segundo_cierre_vencido(unicos, pd.Timestamp.now())
-    a_soltar |= _codigos_ausentes(unicos, set(dias_ok[1:]), vistos, codigos_descargar)
+    if podar:
+        a_soltar = _codigos_fuera_de_ventana(df_cache, date_from) | codigos_cerrados
+        a_soltar |= _codigos_segundo_cierre_vencido(unicos, pd.Timestamp.now())
+        a_soltar |= _codigos_ausentes(unicos, set(dias_ok[1:]), vistos, codigos_descargar)
+    else:
+        # El repaso de llamados no suelta nada: mira una ventana corta y no
+        # sabría distinguir «ya no está» de «no la miré». Ver el docstring.
+        a_soltar = set()
 
     # Antes de soltarlas, las de un comprador que alguien sigue se copian a su
     # historial. Es la última vez que se tienen esos datos: en cuanto salgan de
