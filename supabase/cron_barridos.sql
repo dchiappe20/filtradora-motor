@@ -183,11 +183,10 @@ select cron.unschedule(jobname)
                    'licitaciones-nocturno', 'foros-nocturno',
                    'llamados-08', 'llamados-11', 'llamados-14', 'llamados-17');
 
--- 12:00 Chile — el único diurno, lo tienen todos los planes.
-select cron.schedule(
-  'barrido-mediodia', '0 * * * *',
-  $cron$ select motor.disparar_si_toca('compra-agil-diurno.yml', 12, '{"ranura":"mediodia"}'::jsonb) $cron$
-);
+-- 12:00 Chile — el diurno de Compra Ágil: RETIRADO el 2026-09-16. Lo del día lo
+-- trae la función `compra-agil-reciente` cada 5 minutos y los 2dos llamados el
+-- repaso de más abajo. Su nombre sigue en el `unschedule` de arriba para que
+-- volver a ejecutar este archivo lo quite donde todavía esté.
 
 -- 01:00 Chile — barrido completo de los 30 días, cuando el portal va suelto.
 select cron.schedule(

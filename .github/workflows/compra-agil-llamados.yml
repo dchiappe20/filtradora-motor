@@ -35,9 +35,9 @@ permissions:
 jobs:
   repasar:
     runs-on: ubuntu-latest
-    # Una pasada mide 12-17 min. El corte de verdad lo pone el script
-    # (LIMITE_MINUTOS = 40); esto es la red de seguridad.
-    timeout-minutes: 50
+    # Una pasada mide 34-37 min de día. El corte de verdad lo pone el script
+    # (LIMITE_MINUTOS = 90); esto es la red de seguridad.
+    timeout-minutes: 100
     # MISMO grupo que los otros barridos de Compra Ágil: los tres escriben la
     # tabla compartida y nunca deben correr a la vez. El que llegue segundo
     # espera. (La función de cada 5 minutos no entra aquí: no toca lo de días

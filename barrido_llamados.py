@@ -61,9 +61,12 @@ import compra_agil_api
 # está en los primeros días, los últimos son casi gratis.
 DIAS_REPASO = 10
 
-# Tope de la corrida. Una pasada mide 12-17 min; con 40 hay sitio para un día
-# malo del portal y sigue cabiendo de sobra entre dos pasadas (3 h).
-LIMITE_MINUTOS = 40
+# Tope de la corrida. Se estimó en 12-17 min, pero las primeras pasadas reales
+# (2026-09-16, 08:00 y 11:00) midieron 34 y 37: de día el portal tarda 15-20 s
+# por página, contra menos de 1 s de madrugada. Con 40 la de las 11:00 quedó a
+# 3 minutos del corte, y un día lento habría dejado días sin mirar. Con 90 hay
+# margen de sobra y sigue cabiendo entre dos pasadas (3 h).
+LIMITE_MINUTOS = 90
 
 
 def _log(mensaje, progreso=None, publico=None):

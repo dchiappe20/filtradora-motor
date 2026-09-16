@@ -43,18 +43,12 @@ name: Barrido diurno Compra Ágil (12:00 Chile)
 # el botón a mano.
 # ─────────────────────────────────────────────────────────────────────────────
 on:
-  schedule:
-    # RESPALDO. El cron de GitHub sólo entiende UTC, y Chile cambia de huso dos
-    # veces al año (UTC−4 en invierno, UTC−3 en verano), así que se programan las
-    # DOS horas UTC posibles y el guardia descarta la que no corresponda:
-    #   15:17 UTC = 12:17 (verano) | 11:17 (invierno)
-    #   16:17 UTC = 13:17 (verano) | 12:17 (invierno)
-    #
-    # VAN EN DOS LÍNEAS SEPARADAS A PROPÓSITO: `github.event.schedule` devuelve
-    # la expresión tal cual está escrita, así que con `17 15,16` las dos
-    # corridas eran indistinguibles y no se podía saber cuál era la del mediodía.
-    - cron: '17 15 * * *'
-    - cron: '17 16 * * *'
+  # RETIRADO DE LA PROGRAMACIÓN el 2026-09-16. Lo publicado en el día lo trae la
+  # función de Supabase `compra-agil-reciente` cada 5 minutos, y los pasos a 2do
+  # llamado los detecta `compra-agil-llamados.yml` cuatro veces al día, así que
+  # este diurno quedó repitiendo trabajo — y, al compartir grupo de concurrencia
+  # con el repaso de llamados, podía dejar esperando al de las 14:00.
+  # Sin `schedule:` ni turno en pg_cron sólo corre si alguien lo lanza a mano.
   # A mano desde "Actions" -> "Run workflow", y también el camino por el que
   # entra el disparo puntual de Supabase: corre siempre, sea la hora que sea.
   workflow_dispatch:
