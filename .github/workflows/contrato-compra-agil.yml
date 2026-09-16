@@ -56,6 +56,13 @@ jobs:
           python pruebas/generar_buscador_ts.py
           git diff --exit-code supabase/functions/compra-agil-reciente/buscador.ts
 
+      # Carga cada función ENTERA, como hace Supabase al arrancarla. Las pruebas de
+      # contrato sólo cargan `ficha.ts`, así que un import roto en `index.ts` pasaba
+      # en verde y la función moría en producción con 503 BOOT_ERROR (le pasó a
+      # `licitaciones-reciente` entre el 2026-09-11 y el 16).
+      - name: ¿Arrancan las funciones?
+        run: node --test pruebas/arranque_funciones.test.ts
+
       - name: Filas del Python
         run: python pruebas/filas_python.py > "$RUNNER_TEMP/esperado.json"
 

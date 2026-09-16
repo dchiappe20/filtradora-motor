@@ -29,7 +29,11 @@
 //   · NO detecta cambios de estado: eso lo hace el barrido nocturno.
 //   · NO filtra: los filtros se aplican en la app.
 
-import { type Dict, esDict, filasDeRespuesta, type Fila, HILOS, URL_API } from "./ficha.ts";
+import { type Dict, esDict, type Fila } from "../_shared/py.ts";
+// `esDict` viene de `_shared` y NO de `./ficha.ts`: ficha lo usa pero no lo
+// exporta. Importarlo de ahí hizo que la función no arrancara nunca
+// (503 BOOT_ERROR) desde que se desplegó; lo vigila `arranque_funciones.test.ts`.
+import { filasDeRespuesta, HILOS, URL_API } from "./ficha.ts";
 
 declare const EdgeRuntime: { waitUntil(promesa: Promise<unknown>): void } | undefined;
 
