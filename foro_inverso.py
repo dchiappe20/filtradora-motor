@@ -26,7 +26,7 @@ import html as html_mod
 import unicodedata
 import urllib.parse
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -77,13 +77,12 @@ def _normalizar(texto: str) -> str:
 
 
 def _variantes_normalizadas():
-    """Término(s) de detección = NOMBRE de la empresa actual (sesión o EMPRESA_NOMBRE
-    del entorno). Multi-empresa: cada una detecta el suyo. Si no hay nombre, cae al
-    config antiguo (`FORO_INVERSO_PROVEEDOR_VARIANTES`)."""
-    import empresa_config
-    n = _normalizar(empresa_config.nombre_empresa_actual())
-    if n:
-        return [n]
+    """Término(s) de detección: los nombres que la empresa eligió revisar (hasta
+    3, ver `nombres_a_revisar`), y si no eligió ninguno, el del registro central.
+    Si tampoco hay, cae al config antiguo (`FORO_INVERSO_PROVEEDOR_VARIANTES`)."""
+    variantes = variantes_de(nombres_a_revisar())
+    if variantes:
+        return variantes
     return [_normalizar(v) for v in config.FORO_INVERSO_PROVEEDOR_VARIANTES if str(v).strip()]
 
 
@@ -319,6 +318,30 @@ def _post_servicios_js(sesion, rbf_code, referer):
 _RUT_COMPRADOR_RE = re.compile(r'https://comprador\.mercadopublico\.cl/ficha/[\d.\-Kk]+')
 # Razón social del organismo comprador en la ficha (columna "Cliente" en la UI)
 _CLIENTE_RE = re.compile(r'id="lnkFicha2Razon"[^>]*>([^<]+)<')
+# Título y estado, del mismo HTML de la ficha. Salen en UNA petición que ya se
+# hacía, y sin ticket de Mercado Público: por eso la app puede mantener la lista
+# al día aunque la empresa no tenga ticket propio (sólo Amilab tiene uno).
+_NOMBRE_RE = re.compile(r'id="lblFicha1Nombre"[^>]*>([^<]*)<')
+_ESTADO_RE = re.compile(r'id="lblFicha1Estado"[^>]*>([^<]*)<')
+
+
+def esta_cerrada(estado) -> bool:
+    """¿La licitación está CERRADA, o sea en evaluación?
+
+    Es el único estado con foro inverso vivo: las preguntas del comprador a un
+    oferente ocurren mientras evalúa. Antes de cerrar no hay a quién preguntarle,
+    y después de adjudicar ya no hay plazo para contestar."""
+    return "cerrad" in _normalizar(estado)
+
+
+def es_irreversible(estado) -> bool:
+    """¿De este estado ya no se vuelve a «Cerrada»?
+
+    Adjudicada, desierta, revocada o cancelada: el proceso terminó. Ésas salen
+    de la lista de ofertadas, porque revisar su foro es gastar peticiones en algo
+    que ya nadie podría responder a tiempo."""
+    e = _normalizar(estado)
+    return any(k in e for k in ("adjudicad", "desiert", "revocad", "cancelad"))
 
 
 def resolver_urls_licitacion(codigo):
@@ -338,35 +361,82 @@ def resolver_urls_licitacion(codigo):
         return "", ""
 
 
-def _resolver_via_ficha(sesion, codigo):
-    """Flujo completo: ficha -> enc -> foro -> intRBFCode -> JSON.
-    Devuelve (aclaraciones, intRBFCode, url_ficha, cliente). intRBFCode puede ser
-    None si la licitación no tiene sección de "Aclaración de oferta"; `cliente`
-    es la razón social del organismo comprador (puede venir vacía)."""
-    resp_ficha = sesion.get(DETALLE_FICHA_URL, params={"idLicitacion": codigo}, timeout=25)
-    resp_ficha.raise_for_status()
-    url_ficha = resp_ficha.url
-    html_ficha = resp_ficha.text
+def datos_ficha(sesion, codigo) -> dict:
+    """Lo que dice la ficha pública de una licitación, en UNA petición.
 
-    m_cli = _CLIENTE_RE.search(html_ficha)
-    cliente = html_mod.unescape(m_cli.group(1)).strip() if m_cli else ""
+    -> {codigo, nombre, estado, cliente, url_ficha, foro_url}
 
-    m = re.search(r'id="imgAclaracionOferta"[^>]*href="([^"]+)"', html_ficha)
-    if not m:
-        return [], None, url_ficha, cliente
+    `foro_url` vacío significa que la ficha no ofrece sección de «Aclaración de
+    oferta»: es lo que la pantalla muestra como «Foro abierto: No».
 
-    raw_href = html_mod.unescape(m.group(1))
-    foro_url = urllib.parse.urljoin(DETALLE_FICHA_URL, raw_href)
+    Va aparte del foro a propósito. El estado es lo que decide si hay algo que
+    revisar, y preguntarlo cuesta esta sola petición; entrar al foro de una
+    licitación que ni siquiera ha cerrado son dos peticiones tiradas."""
+    resp = sesion.get(DETALLE_FICHA_URL, params={"idLicitacion": codigo}, timeout=25)
+    resp.raise_for_status()
+    html_ficha = resp.text
 
-    resp_foro = sesion.get(foro_url, headers={"Referer": url_ficha}, timeout=25)
+    def _campo(rx):
+        m = rx.search(html_ficha)
+        return html_mod.unescape(m.group(1)).strip() if m else ""
+
+    m_foro = re.search(r'id="imgAclaracionOferta"[^>]*href="([^"]+)"', html_ficha)
+    return {
+        "codigo": codigo,
+        "nombre": _campo(_NOMBRE_RE),
+        "estado": _campo(_ESTADO_RE),
+        "cliente": _campo(_CLIENTE_RE),
+        "url_ficha": resp.url,
+        "foro_url": (urllib.parse.urljoin(DETALLE_FICHA_URL, html_mod.unescape(m_foro.group(1)))
+                     if m_foro else ""),
+    }
+
+
+def aclaraciones_de(sesion, ficha):
+    """Las aclaraciones del foro de esa licitación. -> (aclaraciones, intRBFCode)
+
+    `intRBFCode` en None significa que no hay foro que leer: ni enlace en la
+    ficha, ni código dentro de la página del foro."""
+    if not ficha.get("foro_url"):
+        return [], None
+    resp_foro = sesion.get(ficha["foro_url"],
+                           headers={"Referer": ficha.get("url_ficha") or DETALLE_FICHA_URL},
+                           timeout=25)
     resp_foro.raise_for_status()
-
     rbf_code = _extraer_intRBFCode(resp_foro.text)
     if not rbf_code:
-        return [], None, url_ficha, cliente
+        return [], None
+    return _post_servicios_js(sesion, rbf_code, referer=resp_foro.url), rbf_code
 
-    aclaraciones = _post_servicios_js(sesion, rbf_code, referer=resp_foro.url)
-    return aclaraciones, rbf_code, url_ficha, cliente
+
+def _resolver_via_ficha(sesion, codigo):
+    """Flujo completo: ficha -> foro -> JSON.
+    -> (aclaraciones, intRBFCode, url_ficha, cliente, nombre, estado)"""
+    ficha = datos_ficha(sesion, codigo)
+    aclaraciones, rbf_code = aclaraciones_de(sesion, ficha)
+    return (aclaraciones, rbf_code, ficha["url_ficha"], ficha["cliente"],
+            ficha["nombre"], ficha["estado"])
+
+
+def mensajes_de(codigo) -> dict:
+    """TODO el foro de una licitación, tal como está AHORA en el portal.
+
+    Lo usa la ventana de «Mensajes»: se consulta en vivo al abrirla y no se
+    guarda. Así se ven también las preguntas dirigidas a otros oferentes y las
+    respuestas que llegaron después de la última revisión.
+
+    -> {codigo, nombre, cliente, estado, url_ficha, aclaraciones, error}
+    """
+    try:
+        sesion = _crear_sesion()
+        ficha = datos_ficha(sesion, codigo)
+        aclaraciones, _ = aclaraciones_de(sesion, ficha)
+        ficha["aclaraciones"] = aclaraciones
+        ficha["error"] = None
+        return ficha
+    except Exception as e:
+        return {"codigo": codigo, "nombre": "", "cliente": "", "estado": "",
+                "url_ficha": "", "aclaraciones": [], "error": str(e)}
 
 
 # =============================================================================
@@ -422,29 +492,57 @@ def crear_sesion_publica():
     return _crear_sesion()
 
 
-def variantes_de(nombre):
-    """Variantes de detección (normalizadas) a partir del nombre de la empresa.
-    En el barrido nocturno se detecta por el nombre del registro central."""
-    n = _normalizar(nombre)
-    return [n] if n else []
+def variantes_de(nombres):
+    """Variantes de detección (normalizadas) a partir de uno o varios nombres.
+
+    Acepta un texto o una lista. Son varios porque el nombre con el que una
+    empresa está dada de alta aquí no tiene por qué ser la razón social exacta
+    con la que Mercado Público la escribe en el foro, y con el nombre equivocado
+    la revisión no encuentra nada y parece que no hay menciones. Cada empresa
+    elige hasta tres (tabla `foro_nombres`)."""
+    if isinstance(nombres, str):
+        nombres = [nombres]
+    fuera, vistos = [], set()
+    for nombre in (nombres or []):
+        n = _normalizar(nombre)
+        if n and n not in vistos:
+            vistos.add(n)
+            fuera.append(n)
+    return fuera
 
 
 def revisar_codigo(sesion, codigo, variantes_norm):
     """Revisa UN código y devuelve el resultado (mismo formato que la revisión
     manual). No registra nada: el llamador acumula y llama `registrar_revision`."""
     try:
-        aclaraciones, rbf_code, url_ficha, cliente = _resolver_via_ficha(sesion, codigo)
-        hallazgos = _analizar_aclaraciones(aclaraciones, variantes_norm)
-        return {
-            "codigo": codigo, "cliente": cliente, "url_ficha": url_ficha,
-            "hallazgos": hallazgos, "tiene_foro": rbf_code is not None,
-            "tiene_aclaraciones": len(aclaraciones) > 0, "error": None,
-        }
+        ficha = datos_ficha(sesion, codigo)
+        return revisar_con_ficha(sesion, ficha, variantes_norm)
     except Exception as e:
         return {
             "codigo": codigo, "cliente": "", "url_ficha": "", "hallazgos": [],
             "tiene_foro": False, "tiene_aclaraciones": False, "error": str(e),
+            "nombre": "", "estado": "",
         }
+
+
+def revisar_con_ficha(sesion, ficha, variantes_norm):
+    """Como `revisar_codigo`, pero con la ficha ya pedida.
+
+    Es lo que usan el barrido nocturno y la revisión manual, que miran el estado
+    antes de decidir si vale la pena entrar al foro."""
+    try:
+        aclaraciones, rbf_code = aclaraciones_de(sesion, ficha)
+        hallazgos = _analizar_aclaraciones(aclaraciones, variantes_norm)
+        error = None
+    except Exception as e:
+        aclaraciones, rbf_code, hallazgos, error = [], None, [], str(e)
+    return {
+        "codigo": ficha.get("codigo", ""), "cliente": ficha.get("cliente", ""),
+        "url_ficha": ficha.get("url_ficha", ""), "hallazgos": hallazgos,
+        "tiene_foro": rbf_code is not None,
+        "tiene_aclaraciones": len(aclaraciones) > 0, "error": error,
+        "nombre": ficha.get("nombre", ""), "estado": ficha.get("estado", ""),
+    }
 
 
 def olvidar_hallazgos(codigos):
@@ -478,6 +576,149 @@ def olvidar_hallazgos(codigos):
         return 0
     finally:
         _lock_supabase.release()
+
+
+# =============================================================================
+# Con qué nombres se busca a la empresa, y en qué quedó cada ofertada
+# =============================================================================
+
+def nombres_a_revisar() -> list:
+    """Nombres con los que se busca a la empresa en los foros. Hasta 3.
+
+    Antes se usaba sólo el nombre del registro central, y eso fallaba callado:
+    en Mercado Público la empresa aparece con su razón social exacta, que puede
+    no ser el nombre con el que está dada de alta aquí. Con el nombre equivocado
+    la revisión no encuentra nada y parece que no hay menciones.
+
+    Si la empresa no eligió ninguno, se usa el del registro central."""
+    nombre_core = ""
+    try:
+        import empresa_config
+        nombre_core = (empresa_config.nombre_empresa_actual() or "").strip()
+    except Exception:
+        pass
+
+    empresa_id = _empresa_id()
+    if supabase is None or not empresa_id:
+        return [nombre_core] if nombre_core else []
+    try:
+        resp = ejecutar_con_refresco(
+            lambda: supabase.table("foro_nombres").select("nombres")
+            .eq("empresa_id", empresa_id).limit(1).execute())
+        filas = resp.data or []
+        guardados = [str(n).strip()
+                     for n in ((filas[0].get("nombres") if filas else None) or [])
+                     if str(n).strip()]
+        if guardados:
+            return guardados[:3]
+    except Exception as e:
+        print(f"  aviso: no se pudieron leer los nombres a revisar: {e}", flush=True)
+    return [nombre_core] if nombre_core else []
+
+
+def guardar_nombres_a_revisar(nombres) -> list:
+    """Guarda hasta 3 nombres (sin repetir) y devuelve los que quedaron."""
+    limpios = []
+    for n in (nombres or []):
+        n = " ".join(str(n).split())
+        if n and n.lower() not in [x.lower() for x in limpios]:
+            limpios.append(n)
+    limpios = limpios[:3]
+
+    empresa_id = _empresa_id()
+    if supabase is None or not empresa_id:
+        raise RuntimeError("No hay sesión para guardar los nombres.")
+    ejecutar_con_refresco(
+        lambda: supabase.table("foro_nombres").upsert(
+            {"empresa_id": empresa_id, "nombres": limpios,
+             "actualizado": datetime.now(timezone.utc).isoformat()},
+            on_conflict="empresa_id").execute())
+    return limpios
+
+
+def resumen_de_revision(ficha, resultado, nombres=None) -> dict:
+    """En qué quedó una licitación. -> {estado_foro, menciones, pendientes}
+
+    `estado_foro` es la frase que lee el cliente en la tabla. Se redacta aquí y
+    no en la pantalla porque la escriben los dos caminos —la revisión nocturna y
+    la manual— y tienen que decir exactamente lo mismo."""
+    nombre_empresa = (nombres or [])[0] if (nombres or []) else "su empresa"
+    estado = ficha.get("estado", "") if isinstance(ficha, dict) else ""
+
+    if resultado is None:
+        # No se revisó el foro: o no ha cerrado, o el proceso terminó.
+        if es_irreversible(estado):
+            return {"estado_foro": "Proceso terminado", "menciones": 0, "pendientes": 0}
+        return {"estado_foro": "Aún no cierra: sin foro que revisar",
+                "menciones": 0, "pendientes": 0}
+
+    if resultado.get("error"):
+        return {"estado_foro": "No se pudo revisar", "menciones": 0, "pendientes": 0}
+    if not resultado.get("tiene_foro"):
+        return {"estado_foro": "Sin foro de aclaraciones", "menciones": 0, "pendientes": 0}
+
+    hallazgos = resultado.get("hallazgos") or []
+    if not hallazgos:
+        return {"estado_foro": f"Sin menciones a {nombre_empresa}",
+                "menciones": 0, "pendientes": 0}
+
+    pendientes = sum(1 for h in hallazgos if h.get("pendiente"))
+    if pendientes:
+        texto = ("1 mención sin responder" if pendientes == 1
+                 else f"{pendientes} menciones sin responder")
+    else:
+        texto = ("1 mención respondida" if len(hallazgos) == 1
+                 else f"{len(hallazgos)} menciones respondidas")
+    return {"estado_foro": texto, "menciones": len(hallazgos), "pendientes": pendientes}
+
+
+def actualizar_ofertadas(fichas, resultados=None, nombres=None) -> int:
+    """Guarda en `foro_ofertadas` lo que se vio de cada licitación.
+
+    Es lo que llena las columnas de la tabla principal: título, estado, si tiene
+    foro y en qué quedó la revisión. Lo escriben tanto el barrido nocturno como
+    la revisión manual, con esta misma función, para que la pantalla diga lo
+    mismo venga de donde venga.
+
+    Best-effort: si la nube no responde, lo revisado ya se guardó aparte."""
+    if supabase is None or not fichas:
+        return 0
+    empresa_id = _empresa_id()
+    if not empresa_id:
+        return 0
+
+    nombres = nombres or nombres_a_revisar()
+    por_codigo = {str(r.get("codigo")): r for r in (resultados or []) if r.get("codigo")}
+    ahora = datetime.now(timezone.utc).isoformat()
+
+    filas = []
+    for ficha in fichas:
+        codigo = str(ficha.get("codigo") or "").strip()
+        if not codigo:
+            continue
+        resumen = resumen_de_revision(ficha, por_codigo.get(codigo), nombres)
+        filas.append({
+            "empresa_id": empresa_id,
+            "codigo": codigo,
+            "nombre": ficha.get("nombre") or "",
+            "estado": ficha.get("estado") or "",
+            "foro_abierto": bool(ficha.get("foro_url")),
+            "estado_foro": resumen["estado_foro"],
+            "menciones": resumen["menciones"],
+            "pendientes": resumen["pendientes"],
+            "ultima_revision": ahora,
+        })
+
+    try:
+        for i in range(0, len(filas), 100):
+            lote = filas[i:i + 100]
+            ejecutar_con_refresco(
+                lambda lote=lote: supabase.table("foro_ofertadas")
+                .upsert(lote, on_conflict="empresa_id,codigo").execute())
+    except Exception as e:
+        print(f"  aviso: no se pudo actualizar la lista de ofertadas: {e}", flush=True)
+        return 0
+    return len(filas)
 
 
 def registrar_revision(resultados):
@@ -536,7 +777,8 @@ def revisar_licitaciones_importadas(codigos, callback_resultado=None, callback_p
                     callback_progreso(mensaje, i, total)
 
                 try:
-                    aclaraciones, rbf_code, url_ficha, cliente = _resolver_via_ficha(sesion, codigo)
+                    (aclaraciones, rbf_code, url_ficha, cliente,
+                     _nombre, _estado) = _resolver_via_ficha(sesion, codigo)
                     hallazgos = _analizar_aclaraciones(aclaraciones, variantes_norm)
                     resultados.append({
                         "codigo": codigo,

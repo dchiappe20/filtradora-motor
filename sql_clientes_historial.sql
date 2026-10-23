@@ -1,7 +1,7 @@
 -- ===========================================================================
 -- sql_clientes_historial.sql — El historial de los clientes favoritos
 --
--- Correr una vez en el SQL Editor de Supabase (proyecto de la Filtradora).
+-- Correr una vez en el SQL Editor de Supabase (proyecto de MP Reader).
 -- Es idempotente: repetirlo no toca nada que ya esté.
 --
 -- QUÉ PROBLEMA RESUELVE

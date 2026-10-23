@@ -1,10 +1,10 @@
-# Filtradora — motor de barridos
+# MP Reader — motor de barridos
 
 Rutinas que recorren los portales de compras públicas de Chile
 ([Mercado Público](https://www.mercadopublico.cl)) y dejan los resultados en una
 base de datos Supabase. Corren solas en GitHub Actions; no tienen interfaz.
 
-Es la mitad *headless* de la Filtradora: la aplicación de escritorio que consume
+Es la mitad *headless* de MP Reader: la aplicación de escritorio que consume
 estos datos vive aparte y no forma parte de este repositorio.
 
 ## Qué hace cada workflow

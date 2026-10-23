@@ -1,7 +1,7 @@
 -- ---------------------------------------------------------------------------
 -- sql_compra_agil_seguimiento.sql — Filtrado en la nube + seguimiento de estado
 --
--- Correr una vez en el SQL Editor de Supabase (proyecto de la Filtradora).
+-- Correr una vez en el SQL Editor de Supabase (proyecto de MP Reader).
 --
 -- Qué cambia:
 --

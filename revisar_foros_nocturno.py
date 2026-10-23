@@ -2,19 +2,23 @@
 """
 revisar_foros_nocturno.py — Revisión nocturna de foros inversos, POR EMPRESA (headless).
 
-Corre 1×/noche en GitHub Actions con la service_role. Para cada empresa con la app
-'filt' activa, recorre su lista de licitaciones ofertadas (`foro_ofertadas`) y:
+Corre 1×/noche en GitHub Actions con la service_role, disparado a las 05:00 de
+Chile por pg_cron (ver `supabase/cron_barridos.sql`; el `schedule` del workflow
+es sólo respaldo). Para cada empresa con la app 'filt' activa recorre su lista
+de licitaciones ofertadas (`foro_ofertadas`) y, de cada una:
 
-  - EGRESA (elimina de la lista) la licitación si lleva > 1 año o si dejó de estar
-    CERRADA (adjudicada/desierta/revocada...), y en ese caso BORRA además sus
-    menciones de la lista principal: en una licitación ya resuelta no queda nada
-    que contestar a tiempo.
-  - REVISA el foro de aclaración de las que siguen CERRADA (en evaluación),
-    detectando el NOMBRE de la empresa (del registro central) y acumulando los
-    hallazgos en foro_inverso_actuales.
+  - PIDE LA FICHA PÚBLICA, que en una sola petición da el título, el estado y si
+    tiene sección de aclaraciones. No usa la API oficial ni, por tanto, ticket.
+  - EGRESA la licitación si lleva > 1 año en la lista o si su estado ya no puede
+    volver a «Cerrada» (adjudicada, desierta, revocada, cancelada), y en ese caso
+    BORRA además sus menciones: ahí ya no queda nada que contestar a tiempo.
+  - REVISA el foro SÓLO si está Cerrada (en evaluación), que es el único estado
+    con foro inverso vivo, buscando los nombres que la empresa eligió (hasta 3,
+    tabla `foro_nombres`; si no eligió ninguno, el del registro central).
+  - DEJA EN LA TABLA lo que vio —título, estado, foro abierto y en qué quedó la
+    revisión—, que es lo que la pantalla muestra como lista principal.
 
-El INGRESO (llenar `foro_ofertadas`) queda pendiente: mientras la lista esté vacía,
-este runner no hace nada. La empresa se fija por iteración con EMPRESA_ID/EMPRESA_NOMBRE.
+La empresa se fija por iteración con EMPRESA_ID/EMPRESA_NOMBRE.
 """
 import os
 import sys
@@ -22,7 +26,6 @@ import time
 from datetime import datetime, timezone, timedelta
 
 import auth
-import api_client
 import config
 import foro_inverso
 from helpers import id_corto
@@ -69,14 +72,21 @@ def _revisar_empresa(empresa_id, nombre):
     if not filas:
         print(f"  {nombre}: sin ofertadas en la lista.", flush=True)
         return
-    variantes = foro_inverso.variantes_de(nombre)
+
+    # Con qué nombres se busca a la empresa lo decide ella (hasta 3, en
+    # `foro_nombres`): la razón social de Mercado Público no siempre es el
+    # nombre con el que está dada de alta aquí. Sin eso, la revisión no
+    # encontraba nada y parecía que no había menciones.
+    nombres = foro_inverso.nombres_a_revisar()
+    variantes = foro_inverso.variantes_de(nombres)
     if not variantes:
         print(f"  {nombre}: sin nombre para detectar; se omite.", flush=True)
         return
 
     sesion = foro_inverso.crear_sesion_publica()
     renovar_cada = max(50, config.FORO_INVERSO_RENOVAR_SESION_CADA)
-    a_eliminar, a_olvidar, resultados, revisados = [], [], [], []
+    a_eliminar, a_olvidar, resultados, revisados, fichas = [], [], [], [], []
+    sin_cerrar = 0
     n = 0
 
     for fila in filas:
@@ -89,42 +99,52 @@ def _revisar_empresa(empresa_id, nombre):
             a_eliminar.append(codigo)
             continue
 
-        est = api_client.estado_licitacion(codigo)
-        if est in ("publicada", "desconocido"):
-            continue  # aún no cierra / no se pudo saber: se conserva, sin revisar foro
+        n += 1
+        if n > 1 and (n - 1) % renovar_cada == 0:
+            sesion = foro_inverso.crear_sesion_publica()
 
-        # SÓLO LAS CERRADAS (en evaluación) son relevantes. Una adjudicada,
-        # desierta o revocada se egresa SIN revisar y además se lleva sus
-        # menciones de la lista principal.
-        #
-        # Antes se le daba una última pasada «por si acaso», y eso hacía justo lo
-        # contrario de lo que se quiere: volvía a registrar sus preguntas con la
-        # fecha de hoy, así que una licitación ya adjudicada seguía apareciendo
-        # entre lo pendiente otros 30 días, hasta que la poda por antigüedad se
-        # la llevaba. Lo que se pregunta en el foro de una adjudicada ya no se
-        # puede contestar a tiempo: no es trabajo pendiente, es ruido.
-        if est == "resuelta":
+        # UNA petición: la ficha pública trae título, estado y si hay foro. Antes
+        # el estado se le preguntaba a la API oficial, que exige el ticket de
+        # Mercado Público — algo que sólo tiene Amilab.
+        try:
+            ficha = foro_inverso.datos_ficha(sesion, codigo)
+        except Exception as e:
+            print(f"    aviso: no se pudo leer la ficha de {codigo}: {e}", flush=True)
+            continue   # se conserva en la lista y se reintenta mañana
+        fichas.append(ficha)
+        estado = ficha.get("estado") or ""
+
+        # De adjudicada, desierta, revocada o cancelada NO se vuelve a «Cerrada»:
+        # se egresa sin revisar y se lleva sus menciones. Lo que se pregunte en
+        # el foro de una adjudicada ya no se puede contestar a tiempo: no es
+        # trabajo pendiente, es ruido.
+        if foro_inverso.es_irreversible(estado):
             a_eliminar.append(codigo)
             a_olvidar.append(codigo)
             continue
 
-        n += 1
-        if n > 1 and (n - 1) % renovar_cada == 0:
-            sesion = foro_inverso.crear_sesion_publica()
-        resultados.append(foro_inverso.revisar_codigo(sesion, codigo, variantes))
+        # SÓLO las Cerradas (en evaluación) tienen foro inverso vivo. Una que
+        # sigue Publicada se conserva y se mirará cuando cierre.
+        if not foro_inverso.esta_cerrada(estado):
+            sin_cerrar += 1
+            time.sleep(config.FORO_INVERSO_PAUSA_SEGUNDOS)
+            continue
+
+        resultados.append(foro_inverso.revisar_con_ficha(sesion, ficha, variantes))
         revisados.append(codigo)
         time.sleep(config.FORO_INVERSO_PAUSA_SEGUNDOS)
 
     if resultados:
         foro_inverso.registrar_revision(resultados)
-    if revisados:
-        try:
-            ahora = datetime.now(timezone.utc).isoformat()
-            for i in range(0, len(revisados), 100):
-                (auth.supabase.table("foro_ofertadas").update({"ultima_revision": ahora})
-                 .eq("empresa_id", empresa_id).in_("codigo", revisados[i:i + 100]).execute())
-        except Exception:
-            pass
+
+    # Lo que la pantalla muestra de cada fila. Va con TODAS las que siguen en la
+    # lista, no sólo las revisadas: de una que aún no cierra también interesa ver
+    # su título y su estado.
+    egresadas = set(a_eliminar)
+    vivas = [f for f in fichas if str(f.get("codigo") or "") not in egresadas]
+    if vivas:
+        foro_inverso.actualizar_ofertadas(vivas, resultados, nombres)
+
     # Primero las menciones y después la lista: si se cae en medio, lo peor que
     # queda es una licitación egresada cuyas menciones se limpian mañana, y no
     # unas menciones huérfanas de algo que ya nadie vuelve a mirar.
@@ -135,8 +155,8 @@ def _revisar_empresa(empresa_id, nombre):
 
     con_mencion = sum(1 for r in resultados if r.get("hallazgos"))
     print(f"  {nombre}: revisadas {len(revisados)}, con mención {con_mencion}, "
-          f"egresadas {len(a_eliminar)} ({len(a_olvidar)} ya resueltas, sin revisar).",
-          flush=True)
+          f"sin cerrar aún {sin_cerrar}, egresadas {len(a_eliminar)} "
+          f"({len(a_olvidar)} ya resueltas, sin revisar).", flush=True)
 
 
 def main():

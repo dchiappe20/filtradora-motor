@@ -1,7 +1,7 @@
 -- ---------------------------------------------------------------------------
 -- sql_descarga_run.sql — Guardar la corrida de GitHub que atiende cada descarga
 --
--- Correr una vez en el SQL Editor de Supabase (proyecto de la Filtradora).
+-- Correr una vez en el SQL Editor de Supabase (proyecto de MP Reader).
 --
 -- Para qué: la app ya no habla con la API de GitHub —el token dejó de viajar
 -- dentro del .exe—, así que tampoco puede preguntar «¿cuál es la corrida activa?»
