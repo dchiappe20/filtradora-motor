@@ -1,0 +1,26 @@
+name: Prueba API Compra Ágil v2 (temporal)
+
+# Prueba de la API oficial de Compra Ágil con el ticket del motor. Vive sólo en
+# la rama `prueba-api-compra-agil`: no toca los barridos ni escribe en Supabase.
+on:
+  push:
+    branches: [prueba-api-compra-agil]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests
+      - name: Probar
+        env:
+          MP_TICKET: ${{ secrets.MP_TICKET_AMILAB }}
+        run: python pruebas/probar_api_compra_agil.py
