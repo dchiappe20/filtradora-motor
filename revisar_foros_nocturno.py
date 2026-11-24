@@ -65,12 +65,15 @@ def _vencida(fecha_alta_iso) -> bool:
 
 
 def _revisar_empresa(empresa_id, nombre):
+    # Este registro es PÚBLICO (el repo lo es): la empresa va por su id corto,
+    # nunca por su nombre ni con datos que la identifiquen.
+    et = f"empresa {id_corto(empresa_id)}"
     os.environ["EMPRESA_ID"] = empresa_id
     os.environ["EMPRESA_NOMBRE"] = nombre or ""
 
     filas = _ofertadas(empresa_id)
     if not filas:
-        print(f"  {nombre}: sin ofertadas en la lista.", flush=True)
+        print(f"  {et}: sin ofertadas en la lista.", flush=True)
         return
 
     # Con qué nombres se busca a la empresa lo decide ella (hasta 3, en
@@ -80,7 +83,7 @@ def _revisar_empresa(empresa_id, nombre):
     nombres = foro_inverso.nombres_a_revisar()
     variantes = foro_inverso.variantes_de(nombres)
     if not variantes:
-        print(f"  {nombre}: sin nombre para detectar; se omite.", flush=True)
+        print(f"  {et}: sin nombre para detectar; se omite.", flush=True)
         return
 
     sesion = foro_inverso.crear_sesion_publica()
@@ -154,7 +157,7 @@ def _revisar_empresa(empresa_id, nombre):
         _eliminar(empresa_id, a_eliminar)
 
     con_mencion = sum(1 for r in resultados if r.get("hallazgos"))
-    print(f"  {nombre}: revisadas {len(revisados)}, con mención {con_mencion}, "
+    print(f"  {et}: revisadas {len(revisados)}, con mención {con_mencion}, "
           f"sin cerrar aún {sin_cerrar}, egresadas {len(a_eliminar)} "
           f"({len(a_olvidar)} ya resueltas, sin revisar).", flush=True)
 
@@ -178,12 +181,12 @@ def main():
     hubo_error = False
     for empresa_id, nombre in empresas:
         # Id corto, no el UUID entero: este log es publico (ver helpers.id_corto).
-        print(f"=== {nombre} ({id_corto(empresa_id)}) ===", flush=True)
+        print(f"=== empresa {id_corto(empresa_id)} ===", flush=True)
         try:
             _revisar_empresa(empresa_id, nombre)
         except Exception as e:
             hubo_error = True
-            print(f"  ERROR en {nombre}: {e}", flush=True)
+            print(f"  ERROR en empresa {id_corto(empresa_id)}: {e}", flush=True)
 
     print("Revisión nocturna de foros terminada.", flush=True)
     return 1 if hubo_error else 0

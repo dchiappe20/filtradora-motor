@@ -123,8 +123,4 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           # service_role: recorre empresas de `core` y escribe hallazgos (salta RLS).
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          # Tickets por empresa: se usan solo para consultar el ESTADO de cada
-          # licitación (cerrada/adjudicada/...). El scraping del foro no usa ticket.
-          MP_TICKET_AMILAB: ${{ secrets.MP_TICKET_AMILAB }}
-          MP_TICKET_UTEM: ${{ secrets.MP_TICKET_UTEM }}
         run: python revisar_foros_nocturno.py

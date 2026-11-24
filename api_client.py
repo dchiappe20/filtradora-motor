@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import os
+import threading
 
 import datos_nube
 import historial_clientes
@@ -48,6 +49,61 @@ LOTE_GUARDADO = 400
 # Las columnas de la tabla, en orden y con los encabezados de siempre. Sirven
 # para armar el DataFrame vacío que `sincronizar_tabla` espera cuando lo único
 # que hay que hacer es borrar.
+# ---------------------------------------------------------------------------
+# Consultas a la API oficial: cuenta y respeta los límites del ticket.
+#
+# El ticket es UNO para todos los clientes y la API da 10.000 consultas diarias
+# por ticket, sin decir cuántas van. Cada consulta pasa por `_api_get`, que la
+# cuenta; al final de cada proceso `registrar_consumo` la suma al contador de
+# Supabase (`motor.consumo_ticket`, ver supabase/consumo_ticket.sql).
+#
+# Además la API corta con 429 si se pasan ~4 consultas por segundo SUMANDO todos
+# los procesos que usan el ticket. Ante un 429 se espera lo que diga
+# `Retry-After` (con techo de 60 s), si es más que el backoff propio.
+# ---------------------------------------------------------------------------
+_CONSULTAS = 0
+_CONSULTAS_LOCK = threading.Lock()
+
+
+def _api_get(params, timeout):
+    global _CONSULTAS
+    with _CONSULTAS_LOCK:
+        _CONSULTAS += 1
+    return requests.get(URL_API, params=params, timeout=timeout)
+
+
+def _espera_429(resp, espera):
+    """Segundos a esperar tras un 429/5xx: el backoff propio o `Retry-After`."""
+    try:
+        pedida = float(resp.headers.get("Retry-After") or 0)
+    except (TypeError, ValueError):
+        pedida = 0
+    return min(max(espera, pedida), 60)
+
+
+def registrar_consumo(origen):
+    """Suma al contador del ticket lo consultado desde la última vez. -> total del día o None
+
+    Nunca rompe el proceso que la llama: si Supabase no contesta, se avisa en el
+    registro y se sigue (lo no sumado se pierde, no se reintenta).
+    """
+    global _CONSULTAS
+    with _CONSULTAS_LOCK:
+        n, _CONSULTAS = _CONSULTAS, 0
+    if not n:
+        return None
+    try:
+        import auth
+        resp = auth.supabase.rpc("ticket_sumar_consumo",
+                                 {"p_origen": origen, "p_consultas": n}).execute()
+        total = resp.data
+        print(f"[consumo] {origen}: {n} consultas; el ticket lleva {total} hoy (UTC).", flush=True)
+        return total
+    except Exception as e:
+        print(f"[consumo] no se pudieron registrar {n} consultas de {origen}: {e}", flush=True)
+        return None
+
+
 COLUMNAS_COMPLETAS = [
     "Numero Adquisición", "Nombre Adquisición", "Organismo", "RUT Organismo",
     "Fecha Publicación", "Fecha Cierre", "Cantidad",
@@ -66,7 +122,7 @@ def estado_licitacion(codigo):
     espera = 2
     for _ in range(4):
         try:
-            resp = requests.get(URL_API,
+            resp = _api_get(
                                 params={"codigo": codigo, "ticket": ticket_mercado_publico()},
                                 timeout=15)
             if resp.status_code == 200:
@@ -85,7 +141,7 @@ def estado_licitacion(codigo):
                     return "resuelta"
                 return "desconocido"      # estado inesperado: no egresar por las dudas
             elif resp.status_code in [429, 500, 502, 503, 504]:
-                time.sleep(espera); espera = min(espera * 2, 20)
+                time.sleep(_espera_429(resp, espera)); espera = min(espera * 2, 20)
             else:
                 return "desconocido"
         except Exception:
@@ -110,7 +166,7 @@ def comprador_de(codigo):
     lo que interesa es quién compra, no la licitación.
     """
     try:
-        resp = requests.get(URL_API,
+        resp = _api_get(
                             params={"codigo": codigo, "ticket": ticket_mercado_publico()},
                             timeout=30)
     except Exception as e:
@@ -232,7 +288,7 @@ def procesar_licitacion(codigo, fecha_exacta_str):
     espera = 2
     for _ in range(6):
         try:
-            resp = requests.get(URL_API,
+            resp = _api_get(
                                 params={"codigo": codigo, "ticket": ticket_mercado_publico()},
                                 timeout=15)
             if resp.status_code == 200:
@@ -244,7 +300,7 @@ def procesar_licitacion(codigo, fecha_exacta_str):
                 return filas, estado
 
             elif resp.status_code in [429, 500, 502, 503, 504]:
-                time.sleep(espera)
+                time.sleep(_espera_429(resp, espera))
                 espera = min(espera * 2, 20)
             else:
                 return [], "ERROR_API"
@@ -277,13 +333,13 @@ def _listar_dia(fecha_str_ddmmyyyy):
     fecha_busqueda = fecha_str_ddmmyyyy.replace("-", "")
     for _ in range(3):
         try:
-            resp = requests.get(URL_API,
+            resp = _api_get(
                                 params={"fecha": fecha_busqueda, "ticket": ticket_mercado_publico()},
                                 timeout=15)
             if resp.status_code == 200:
                 return resp.json().get("Listado", []) or [], True
             if resp.status_code in [429, 500, 502, 503, 504]:
-                time.sleep(2)
+                time.sleep(_espera_429(resp, 2))
                 continue
             return [], False
         except Exception:

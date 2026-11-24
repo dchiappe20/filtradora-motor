@@ -11,3 +11,7 @@ verify_jwt = false
 [functions.licitaciones-reciente]
 # La llama pg_cron sin JWT; exige `x-cron-secreto` y la compara contra la base.
 verify_jwt = false
+
+[functions.comprador-licitacion]
+# La llama la app con la sesión de la persona: se exige JWT.
+verify_jwt = true

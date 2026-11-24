@@ -52,6 +52,8 @@ function claveServicio(): string {
 }
 const CLAVE = claveServicio();
 
+const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY") ?? "";
+
 const TIMEOUT_MS = 15_000;       // como `procesar_licitacion`
 const PRESUPUESTO_MS = 45_000;   // corre cada minuto: tiene que acabar antes de la siguiente
 const MAX_FICHAS = 60;           // una tanda rara (las 98 de otro día) se reparte en varias pasadas
@@ -82,13 +84,23 @@ function hoyEnChile(): { iso: string; ddmmyyyy: string } {
   return { iso, ddmmyyyy: `${d}${m}${a}` };
 }
 
-/** GET a la API oficial. -> el JSON, o null si no contestó bien. */
-async function pedir(params: Record<string, string>): Promise<Dict | null> {
+/** Lo que lleva gastado del ticket una pasada, y cuánto pidió esperar la API. */
+type Cuenta = { consultas: number; esperarMs: number };
+
+/** GET a la API oficial. -> el JSON, o null si no contestó bien.
+ *  Cuenta cada consulta (ver `registrarConsumo`) y, ante un 429, guarda lo que
+ *  pida `Retry-After` para que quien reintenta espere eso y no menos. */
+async function pedir(params: Record<string, string>, cuenta: Cuenta): Promise<Dict | null> {
   const url = new URL(URL_API);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   url.searchParams.set("ticket", TICKET);
+  cuenta.consultas++;
   try {
     const r = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+    if (r.status === 429) {
+      const pedida = Number(r.headers.get("Retry-After") ?? "0");
+      if (Number.isFinite(pedida) && pedida > 0) cuenta.esperarMs = Math.min(pedida * 1000, 30_000);
+    }
     if (!r.ok) return null;
     const j = await r.json();
     return esDict(j) ? j : null;
@@ -113,13 +125,13 @@ type Resumen = {
   ms: number;
 };
 
-async function repasar(): Promise<Resumen> {
+async function repasar(cuenta: Cuenta): Promise<Resumen> {
   const t0 = Date.now();
   const { iso, ddmmyyyy } = hoyEnChile();
   const errores: string[] = [];
 
   // 1) El listado de hoy. Una sola consulta, sin páginas.
-  const lista = await pedir({ fecha: ddmmyyyy });
+  const lista = await pedir({ fecha: ddmmyyyy }, cuenta);
   const listado = lista && Array.isArray(lista.Listado) ? lista.Listado : null;
   if (!listado) {
     const mensaje = lista && typeof lista.Mensaje === "string" ? lista.Mensaje : "sin respuesta";
@@ -147,7 +159,7 @@ async function repasar(): Promise<Resumen> {
       const codigo = cola[siguiente++];
       let resultado: ReturnType<typeof filasDeRespuesta> | null = null;
       for (let intento = 0; intento < 2 && !resultado; intento++) {
-        const datos = await pedir({ codigo });
+        const datos = await pedir({ codigo }, cuenta);
         if (datos) {
           try {
             const r = filasDeRespuesta(datos, codigo, iso);
@@ -156,7 +168,11 @@ async function repasar(): Promise<Resumen> {
             // respuesta rara: se trata como fallo, igual que el Python
           }
         }
-        if (!resultado) await new Promise((listo) => setTimeout(listo, 2000));
+        if (!resultado) {
+          const ms = Math.max(2000, cuenta.esperarMs);
+          cuenta.esperarMs = 0;
+          await new Promise((listo) => setTimeout(listo, ms));
+        }
       }
       if (!resultado) {
         fallidas++;                       // la próxima pasada la vuelve a intentar
@@ -194,9 +210,44 @@ async function repasar(): Promise<Resumen> {
   return resumen;
 }
 
-async function repasarYAnotar(): Promise<void> {
+/** Suma al contador del ticket (supabase/consumo_ticket.sql) y, la primera vez
+ *  del día que se pasa el 80% del cupo, avisa por correo a quien es super_admin.
+ *  Nunca hace fallar la pasada. */
+async function registrarConsumo(consultas: number): Promise<void> {
+  if (consultas <= 0) return;
   try {
-    console.log(JSON.stringify(await repasar()));
+    const total = await rpc<number>("ticket_sumar_consumo", {
+      p_origen: "licitaciones-reciente", p_consultas: consultas,
+    });
+    if (total < 8000 || !(await rpc<boolean>("ticket_tomar_aviso", {}))) return;
+    const para = await rpc<string[]>("ticket_correos_aviso", {});
+    if (!RESEND_API_KEY || !para?.length) {
+      console.error(`[consumo] ${total} consultas hoy (80% del cupo) y no hay cómo avisar`);
+      return;
+    }
+    const r = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from: "RendApps <contacto@rendapps.cl>",
+        to: para,
+        subject: `MP Reader: el ticket de Mercado Público va en ${total} de 10.000 consultas hoy`,
+        text: `El ticket de la API de Mercado Público lleva ${total} consultas hoy (día UTC).\n` +
+          `Al llegar a 10.000 la API deja de responder hasta la medianoche UTC ` +
+          `(21:00 en Chile en horario de verano, 20:00 en invierno).\n\n` +
+          `Detalle por proceso: select * from motor.consumo_ticket_diario order by dia desc;`,
+      }),
+    });
+    if (!r.ok) console.error(`[consumo] el aviso no salió: HTTP ${r.status}`);
+  } catch (e) {
+    console.error("[consumo] no se pudo registrar:", sinTicket(String(e)));
+  }
+}
+
+async function repasarYAnotar(): Promise<void> {
+  const cuenta: Cuenta = { consultas: 0, esperarMs: 0 };
+  try {
+    console.log(JSON.stringify(await repasar(cuenta)));
   } catch (e) {
     const error = sinTicket(String(e));
     console.error("repaso fallido:", error);
@@ -208,6 +259,8 @@ async function repasarYAnotar(): Promise<void> {
     } catch (_) {
       // sin base no hay dónde anotarlo
     }
+  } finally {
+    await registrarConsumo(cuenta.consultas);
   }
 }
 

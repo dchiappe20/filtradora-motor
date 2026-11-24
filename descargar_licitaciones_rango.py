@@ -105,4 +105,9 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        codigo = main()
+    finally:
+        # Lo que gastó del ticket, pase lo que pase (ver api_client.registrar_consumo).
+        api_client.registrar_consumo("descarga-rango")
+    sys.exit(codigo)

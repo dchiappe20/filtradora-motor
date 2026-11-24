@@ -66,10 +66,9 @@ jobs:
 
       - name: Ejecutar descarga del rango
         env:
-          # Un ticket POR EMPRESA. El runner elige por EMPRESA_NOMBRE -> MP_TICKET_<SLUG>.
-          # Al sumar una empresa nueva: crear su Secret y agregar aquí su línea.
-          MP_TICKET_AMILAB: ${{ secrets.MP_TICKET_AMILAB }}
-          MP_TICKET_UTEM: ${{ secrets.MP_TICKET_UTEM }}
+          # UN solo ticket para todos los clientes (la copia es compartida).
+          # `MP_TICKET` es el secreto nuevo; mientras no exista, el antiguo.
+          MP_TICKET: ${{ secrets.MP_TICKET || secrets.MP_TICKET_AMILAB }}
           FECHA_INICIO: ${{ inputs.fecha_inicio }}
           FECHA_FIN: ${{ inputs.fecha_fin }}
         run: python descargar_licitaciones_rango.py

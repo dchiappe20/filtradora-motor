@@ -98,7 +98,7 @@ def ruts_seguidos() -> set:
     empeora lo que ya había.
     """
     try:
-        resp = auth.supabase.schema("core").rpc("compradores_seguidos").execute()
+        resp = auth.supabase.schema("core").rpc("compradores_seguidos", {}).execute()
     except Exception as e:
         _log(f"no se pudo saber a quién sigue la gente ({e}); no se archiva nada")
         return set()
