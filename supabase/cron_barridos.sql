@@ -242,6 +242,10 @@ select cron.schedule(
   $cron$ select motor.disparar_si_toca('compra-agil-llamados.yml', 17, '{"ranura":"17"}'::jsonb) $cron$
 );
 
+-- Domingo 04:40 UTC — `limpiar-registros` borra cron.job_run_details de más de
+-- 7 días y motor.barrido_disparos de más de 30. Lo define
+-- sql_seguridad_limpieza.sql en el repo de la app (Filtradora-amilab).
+
 -- ============================================================================
 -- COMPROBAR QUE FUNCIONA
 --

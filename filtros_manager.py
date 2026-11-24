@@ -7,6 +7,9 @@ from helpers import _get_appdata_dir
 
 FILTROS_FILE = os.path.join(_get_appdata_dir(), "filtros.json")
 
+# Sin reglas por defecto. Este repositorio es público y los barridos leen las
+# reglas de cada empresa desde Supabase (`reglas_planas_de_empresa`); un respaldo
+# local con reglas de un cliente sólo servía para filtrar mal a los demás.
 DEFAULT_FILTERS: dict = {}
 
 # ---------------------------------------------------------------------------
