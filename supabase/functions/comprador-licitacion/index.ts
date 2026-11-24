@@ -61,8 +61,10 @@ async function usuarioDe(req: Request): Promise<string | null> {
   return u.id ?? null;
 }
 
-function responder(rut: string, nombre: string, error: string, status = 200): Response {
-  return Response.json({ rut, nombre, error }, { status });
+/** Siempre 200: la app muestra `error` tal cual y no tiene que distinguir
+ *  códigos HTTP (el cliente Python lanza excepción con cualquier otro). */
+function responder(rut: string, nombre: string, error: string): Response {
+  return Response.json({ rut, nombre, error });
 }
 
 /** El ticket va en la URL: nunca puede llegar a un registro. */
@@ -80,12 +82,12 @@ Deno.serve(async (req) => {
   } catch (_) {
     // sin cuerpo válido: se responde abajo
   }
-  if (!codigo) return responder("", "", "Escriba el ID de una licitación.", 400);
+  if (!codigo) return responder("", "", "Escriba el ID de una licitación.");
 
   try {
     const usuario = await usuarioDe(req);
     if (!usuario || !(await rpc<boolean>("comprador_licitacion_permitido", { p_usuario: usuario }))) {
-      return responder("", "", "No se pudo consultar el comprador. Inténtalo más tarde.", 403);
+      return responder("", "", "No se pudo consultar el comprador. Inténtalo más tarde.");
     }
 
     // 1) La copia compartida, sin gastar ticket.
@@ -94,7 +96,7 @@ Deno.serve(async (req) => {
     if (enCopia?.length) return responder(enCopia[0].rut ?? "", enCopia[0].nombre ?? "", "");
 
     // 2) La API oficial.
-    if (!TICKET) return responder("", "", "No se pudo consultar Mercado Público.", 500);
+    if (!TICKET) return responder("", "", "No se pudo consultar Mercado Público.");
     const url = new URL(URL_API);
     url.searchParams.set("codigo", codigo);
     url.searchParams.set("ticket", TICKET);
@@ -120,6 +122,6 @@ Deno.serve(async (req) => {
     return responder(comprador.RutUnidad ?? "", comprador.NombreOrganismo ?? "", "");
   } catch (e) {
     console.error("[comprador-licitacion]", sinTicket(String(e)));
-    return responder("", "", "No se pudo consultar Mercado Público.", 500);
+    return responder("", "", "No se pudo consultar Mercado Público.");
   }
 });
