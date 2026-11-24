@@ -54,6 +54,8 @@ def claves(obj, pref="", prof=0, out=None):
 
 
 def lista_de(js):
+    if isinstance(js, dict) and isinstance(js.get("payload"), dict):
+        js = js["payload"]
     if isinstance(js, list):
         return js
     if isinstance(js, dict):
@@ -90,14 +92,24 @@ if js is not None:
 js2 = pedir("cambios 1h", BASE, {"ttl_cambio_ms": 3600000, "tamano_pagina": 50})
 if js2 is not None:
     print("   ítems:", len(lista_de(js2)), "· resumen:", json.dumps({k: v for k, v in js2.items() if not isinstance(v, (list, dict))}, ensure_ascii=False)[:400] if isinstance(js2, dict) else "")
-    pag = js2.get("paginacion") if isinstance(js2, dict) else None
+    pag = (js2.get("payload") or {}).get("paginacion") if isinstance(js2, dict) else None
+    print("   payload:", json.dumps(js2.get("payload"), ensure_ascii=False)[:300] if isinstance(js2, dict) else "")
     if pag: print("   paginación:", json.dumps(pag, ensure_ascii=False)[:300])
+
+js2b = pedir("cambios desde 1h (cambio_desde)", BASE, {"cambio_desde": (ahora - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"), "tamano_pagina": 50})
+if js2b is not None:
+    print("   ítems:", len(lista_de(js2b)), "· paginación:", json.dumps((js2b.get("payload") or {}).get("paginacion"), ensure_ascii=False)[:200])
+if js is not None:
+    print("   paginación publicadas 24h:", json.dumps((js.get("payload") or {}).get("paginacion"), ensure_ascii=False)[:200])
+js_tot = pedir("total publicadas", BASE, {"estado": "publicada", "tamano_pagina": 1})
+if js_tot is not None:
+    print("   paginación total publicadas:", json.dumps((js_tot.get("payload") or {}).get("paginacion"), ensure_ascii=False)[:200])
 
 # 3. Búsqueda por palabra
 js3 = pedir("q=reactivo", BASE, {"q": "reactivo", "estado": "publicada", "tamano_pagina": 50})
 if js3 is not None:
     print("   ítems:", len(lista_de(js3)))
-    pag = js3.get("paginacion") if isinstance(js3, dict) else None
+    pag = (js3.get("payload") or {}).get("paginacion") if isinstance(js3, dict) else None
     if pag: print("   paginación:", json.dumps(pag, ensure_ascii=False)[:300])
 
 # 4. Detalle de una cotización (productos, cierres, llamado)
@@ -105,6 +117,7 @@ codigo = None
 for fuente in (js, js2, js3):
     for it in lista_de(fuente or {}):
         codigo = it.get("codigo") or it.get("Codigo") or it.get("id")
+        if codigo and (it.get("convocatoria") or {}).get("estado_convocatoria") == 2: break
         if codigo: break
     if codigo: break
 if codigo:
